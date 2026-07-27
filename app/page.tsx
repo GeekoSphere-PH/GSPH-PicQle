@@ -48,8 +48,8 @@ export default function Home() {
   const [activePool, setActivePool] = useState<string[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [newPlayerId, setNewPlayerId] = useState("");
-  const [teamAInput, setTeamAInput] = useState("");
-  const [teamBInput, setTeamBInput] = useState("");
+  const [teamA, setTeamA] = useState<string[]>([]);
+  const [teamB, setTeamB] = useState<string[]>([]);
   const [winner, setWinner] = useState<"A" | "B">("A");
   const [roundSummary, setRoundSummary] = useState<string[]>([]);
   const [roundsWaited, setRoundsWaited] = useState<Record<string, number>>({});
@@ -154,6 +154,13 @@ export default function Home() {
       // the next rotation per the reference spec.
       setActivePool(data.leftover);
       setRoundsWaited(data.roundsWaited);
+
+      // Carry the built match straight into the "Apply match result" panel
+      // as chips, so there's no manual retyping of ids.
+      if (data.matches.length > 0) {
+        setTeamA(data.matches[0].teamA);
+        setTeamB(data.matches[0].teamB);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to build round.");
     } finally {
@@ -162,8 +169,6 @@ export default function Home() {
   };
 
   const applyMatch = async () => {
-    const teamA = teamAInput.split(",").map((value) => value.trim()).filter(Boolean);
-    const teamB = teamBInput.split(",").map((value) => value.trim()).filter(Boolean);
     if (teamA.length === 0 || teamB.length === 0 || isBusy) return;
 
     setIsBusy(true);
@@ -181,11 +186,26 @@ export default function Home() {
         const returning = [...teamA, ...teamB].filter((id) => !current.includes(id));
         return [...current, ...returning];
       });
+
+      // Reset for the next round.
+      setTeamA([]);
+      setTeamB([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to apply match result.");
     } finally {
       setIsBusy(false);
     }
+  };
+
+  const removeFromTeam = (team: "A" | "B", playerId: string) => {
+    const setter = team === "A" ? setTeamA : setTeamB;
+    setter((current) => current.filter((id) => id !== playerId));
+  };
+
+  const addToTeam = (team: "A" | "B", playerId: string) => {
+    if (!playerId) return;
+    const setter = team === "A" ? setTeamA : setTeamB;
+    setter((current) => (current.includes(playerId) ? current : [...current, playerId]));
   };
 
   return (
@@ -338,25 +358,53 @@ export default function Home() {
 
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
             <h2 className="text-xl font-semibold">Apply match result</h2>
-            <div className="mt-4 space-y-3">
-              <label className="block text-sm">
-                Team A ids
-                <input
-                  value={teamAInput}
-                  onChange={(event) => setTeamAInput(event.target.value)}
-                  disabled={isBusy}
-                  className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 disabled:opacity-50"
-                />
-              </label>
-              <label className="block text-sm">
-                Team B ids
-                <input
-                  value={teamBInput}
-                  onChange={(event) => setTeamBInput(event.target.value)}
-                  disabled={isBusy}
-                  className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 disabled:opacity-50"
-                />
-              </label>
+            <p className="mt-2 text-sm text-zinc-400">Filled in automatically from the last built round — add, remove, or swap players below if needed.</p>
+            <div className="mt-4 space-y-4">
+              {(["A", "B"] as const).map((team) => {
+                const members = team === "A" ? teamA : teamB;
+                const otherMembers = team === "A" ? teamB : teamA;
+                const available = Array.from(players.keys()).filter(
+                  (id) => !members.includes(id) && !otherMembers.includes(id),
+                );
+                return (
+                  <div key={team}>
+                    <p className="text-sm">Team {team}</p>
+                    <div className="mt-1 flex min-h-9 flex-wrap items-center gap-2">
+                      {members.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-cyan-600/20 px-3 py-1 text-xs text-cyan-300"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => removeFromTeam(team, id)}
+                            disabled={isBusy}
+                            aria-label={`Remove ${id} from Team ${team}`}
+                            className="text-cyan-400 hover:text-cyan-100 disabled:opacity-50"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                      {members.length === 0 ? <span className="text-xs text-zinc-500">No players yet</span> : null}
+                    </div>
+                    <select
+                      value=""
+                      disabled={isBusy || available.length === 0}
+                      onChange={(event) => addToTeam(team, event.target.value)}
+                      className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm disabled:opacity-50"
+                    >
+                      <option value="">+ Add player to Team {team}</option>
+                      {available.map((id) => (
+                        <option key={id} value={id}>
+                          {id}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
               <div className="flex gap-3 text-sm">
                 <label className="rounded-lg border border-zinc-700 px-3 py-2">
                   <input type="radio" checked={winner === "A"} onChange={() => setWinner("A")} className="mr-2" />
