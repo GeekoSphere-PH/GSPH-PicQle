@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { mapToRecord, recordToMap } from "@/lib/map-utils";
-import type { LeaderboardEntry, PlayerRating, RoundBuildResult } from "@/lib/rating-types";
+import type { LeaderboardEntry, PlayerRating, RoundBuildResult, RoundMode } from "@/lib/rating-types";
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path);
@@ -52,6 +52,8 @@ export default function Home() {
   const [teamBInput, setTeamBInput] = useState("");
   const [winner, setWinner] = useState<"A" | "B">("A");
   const [roundSummary, setRoundSummary] = useState<string[]>([]);
+  const [roundsWaited, setRoundsWaited] = useState<Record<string, number>>({});
+  const [roundMode, setRoundMode] = useState<RoundMode>("rotation");
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -144,11 +146,14 @@ export default function Home() {
         activePool,
         players: mapToRecord(players),
         courtsAvailable: 1,
+        roundsWaited,
+        mode: roundMode,
       });
       setRoundSummary(data.matches.flatMap((match) => [`${match.teamA.join(", ")} vs ${match.teamB.join(", ")}`]));
       // Matched players are now on a court, not queued; leftover carries into
       // the next rotation per the reference spec.
       setActivePool(data.leftover);
+      setRoundsWaited(data.roundsWaited);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to build round.");
     } finally {
@@ -226,7 +231,10 @@ export default function Home() {
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="font-medium">{player.id}</p>
-                        <p className="text-xs text-zinc-500">Games: {player.gamesPlayed}</p>
+                        <p className="text-xs text-zinc-500">
+                          Games: {player.gamesPlayed}
+                          {inPool && roundsWaited[player.id] ? ` • waiting ${roundsWaited[player.id]} round${roundsWaited[player.id] === 1 ? "" : "s"}` : ""}
+                        </p>
                       </div>
                       <span className={`rounded-full px-2 py-1 text-xs ${inPool ? "bg-emerald-600/20 text-emerald-400" : "bg-zinc-800 text-zinc-300"}`}>
                         {inPool ? "Queued" : "Idle"}
@@ -281,7 +289,31 @@ export default function Home() {
         <section className="grid gap-6 lg:grid-cols-[1fr_1fr]">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
             <h2 className="text-xl font-semibold">Round builder</h2>
-            <p className="mt-2 text-sm text-zinc-400">The current pool is used as the input snapshot and the algorithm picks the closest 4 by rating.</p>
+            <p className="mt-2 text-sm text-zinc-400">
+              {roundMode === "rotation"
+                ? "Whoever has waited the most rounds gets a guaranteed spot, even if that makes the match less balanced."
+                : "Always picks the closest 4 by rating, regardless of who's waited longest."}
+            </p>
+            <div className="mt-3 flex gap-3 text-sm">
+              <label className="rounded-lg border border-zinc-700 px-3 py-2">
+                <input
+                  type="radio"
+                  checked={roundMode === "rotation"}
+                  onChange={() => setRoundMode("rotation")}
+                  className="mr-2"
+                />
+                Fair rotation
+              </label>
+              <label className="rounded-lg border border-zinc-700 px-3 py-2">
+                <input
+                  type="radio"
+                  checked={roundMode === "rating"}
+                  onChange={() => setRoundMode("rating")}
+                  className="mr-2"
+                />
+                Best rating match
+              </label>
+            </div>
             <button
               onClick={runRoundBuilder}
               disabled={isBusy}
