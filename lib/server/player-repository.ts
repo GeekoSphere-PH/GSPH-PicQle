@@ -72,3 +72,21 @@ export async function recordMatch(match: MatchResult): Promise<void> {
     throw new Error(`Failed to record match: ${error.message}`);
   }
 }
+
+// Wipes every player and match row. Mirrors supabase/reset_data.sql, exposed
+// here so the demo UI can trigger the same thing without the SQL editor.
+export async function deleteAllData(): Promise<void> {
+  const supabase = getSupabaseAdminClient();
+
+  const [playersResult, matchesResult] = await Promise.all([
+    supabase.from('players').delete().not('id', 'is', null),
+    supabase.from('matches').delete().not('id', 'is', null),
+  ]);
+
+  if (playersResult.error) {
+    throw new Error(`Failed to delete players: ${playersResult.error.message}`);
+  }
+  if (matchesResult.error) {
+    throw new Error(`Failed to delete matches: ${matchesResult.error.message}`);
+  }
+}

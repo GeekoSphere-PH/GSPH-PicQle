@@ -197,6 +197,42 @@ export default function Home() {
     }
   };
 
+  const resetAllData = async () => {
+    if (isBusy) return;
+    const confirmed = window.confirm(
+      "Single-instance warning: this clears ALL players and match data from the shared database, right now, for every connected user. There is no undo. Continue?",
+    );
+    if (!confirmed) return;
+
+    setIsBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/players", { method: "DELETE" });
+      if (!response.ok) {
+        let message = `Request to /api/players failed (${response.status}).`;
+        try {
+          const data = await response.json();
+          if (data?.error) message = data.error;
+        } catch {
+          // ignore parse failure, keep the default message
+        }
+        throw new Error(message);
+      }
+
+      setPlayers(new Map());
+      setActivePool([]);
+      setLeaderboard([]);
+      setRoundSummary([]);
+      setRoundsWaited({});
+      setTeamA([]);
+      setTeamB([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reset data.");
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const removeFromTeam = (team: "A" | "B", playerId: string) => {
     const setter = team === "A" ? setTeamA : setTeamB;
     setter((current) => current.filter((id) => id !== playerId));
@@ -212,9 +248,23 @@ export default function Home() {
     <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-xl">
-          <h1 className="text-3xl font-semibold">Pickleball rating queue demo</h1>
-          <p className="mt-2 max-w-2xl text-sm text-zinc-400">
-            This minimal interface lets you test the queue model, build rounds from the live pool, and apply match outcomes to the Glicko-2 rating engine. All rating computation runs in a separate microservice — this page only sends and receives state.
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-semibold">Pickleball rating queue demo</h1>
+              <p className="mt-2 max-w-2xl text-sm text-zinc-400">
+                This minimal interface lets you test the queue model, build rounds from the live pool, and apply match outcomes to the Glicko-2 rating engine. All rating computation runs in a separate microservice — this page only sends and receives state.
+              </p>
+            </div>
+            <button
+              onClick={resetAllData}
+              disabled={isBusy}
+              className="shrink-0 rounded-lg border border-red-800 bg-red-950/40 px-3 py-2 text-sm font-medium text-red-300 hover:bg-red-950/70 disabled:opacity-50"
+            >
+              Reset all data
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-red-400/80">
+            Single-instance warning: this database is shared. Resetting clears every player and match for all connected users, with no undo.
           </p>
           {error ? (
             <p className="mt-4 rounded-lg border border-red-800 bg-red-950/50 px-3 py-2 text-sm text-red-300">{error}</p>
