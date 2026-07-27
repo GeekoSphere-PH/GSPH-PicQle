@@ -43,7 +43,10 @@ export async function upsertPlayer(player: PlayerRating): Promise<void> {
       sigma: player.sigma,
       volatility: player.volatility,
       games_played: player.gamesPlayed,
-      last_active_timestamp: player.lastActiveTimestamp,
+      // last_active_timestamp is a bigint column — it rejects fractional
+      // values, which a caller could in principle produce (e.g. a
+      // millisecond-precision float from an upstream clock).
+      last_active_timestamp: Math.round(player.lastActiveTimestamp),
     },
     { onConflict: 'name' },
   );

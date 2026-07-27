@@ -24,9 +24,16 @@ function getConfig() {
   return { url, apiKey };
 }
 
+function resolveTimeoutMs(): number {
+  const raw = process.env.RATING_SERVICE_TIMEOUT_MS;
+  if (!raw) return DEFAULT_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
+}
+
 async function callService<T>(path: string, body: unknown): Promise<T> {
   const { url, apiKey } = getConfig();
-  const timeoutMs = Number(process.env.RATING_SERVICE_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
+  const timeoutMs = resolveTimeoutMs();
 
   let response: Response;
   try {
