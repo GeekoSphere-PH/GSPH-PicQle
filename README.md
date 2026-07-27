@@ -4,16 +4,33 @@
 
 This app has two deployable pieces:
 
-- **This repo** (Next.js, deployed on Vercel) — the UI and thin `app/api/rating/*`
-  proxy routes. It holds no rating logic of its own.
+- **This repo** (Next.js, deployed on Vercel) — the UI, the persistent
+  `PlayerRating`/match history in Supabase, and thin `app/api/rating/*` proxy
+  routes. It holds no rating logic of its own.
 - **[pickleballq-rating-service](../pickleballq-rating-service)** (Python/FastAPI,
   deployed on Render) — the actual Glicko-2 + queue/round-balancing computation.
   It's stateless: every request carries the full player state it needs, every
   response returns the full updated state. It stores nothing.
 
-The browser only ever talks to this app's own `/api/rating/*` routes. Those
-routes call the Render service server-to-server, attaching a shared API key
-that never reaches the browser.
+The browser only ever talks to this app's own routes — never Supabase or the
+rating microservice directly:
+
+- `/api/players` (GET) loads the persisted roster from Supabase.
+- `/api/rating/*` proxy to the Render microservice server-to-server (a
+  shared API key never reaches the browser), and persist the result back to
+  Supabase for the two actions that change ratings (`join`, `match`).
+  `leave` and `round` don't touch the database — per the reference PDF,
+  queue membership never affects a player's persistent rating.
+
+Supabase access is service-role only (`lib/server/supabase-admin.ts`); RLS on
+`players`/`matches` denies the `anon` and `authenticated` roles entirely
+(see `supabase/schema.sql`), since there's no login flow and nothing
+client-side should ever query these tables. `lib/server/player-repository.ts`
+is the only place that maps between the app's string player id (used
+everywhere: `Map` keys, `activePool`, `teamA`/`teamB`, the rating
+microservice's `playerId`) and a `players` row — the DB's own `uuid` primary
+key never surfaces above that layer; the row is looked up/upserted by its
+unique `name` column instead.
 
 ## Supabase + Vercel setup
 
@@ -25,11 +42,13 @@ that never reaches the browser.
 ### Required environment variables
 
 - `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `RATING_SERVICE_URL` — base URL of the deployed rating microservice (e.g. `https://pickleballq-rating-service.onrender.com`)
 - `RATING_SERVICE_API_KEY` — must match the `API_KEY` set on the Render service
 - `RATING_SERVICE_TIMEOUT_MS` — optional, defaults to 25000
+
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` is not currently used by any code path (there's
+no client-side Supabase access) — safe to leave unset.
 
 ### Local development
 

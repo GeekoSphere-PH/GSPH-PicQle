@@ -5,7 +5,10 @@ export type PlayerRow = {
   sigma: number;
   volatility: number;
   games_played: number;
-  last_active_timestamp: string;
+  // Epoch milliseconds (bigint column) — not a Postgres timestamp. Matches
+  // the rating engine's inactivity-decay math, which operates on this as a
+  // plain number.
+  last_active_timestamp: number;
   created_at: string;
 };
 

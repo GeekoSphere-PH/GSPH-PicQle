@@ -5,16 +5,22 @@ import { useEffect, useState } from "react";
 import { mapToRecord, recordToMap } from "@/lib/map-utils";
 import type { LeaderboardEntry, PlayerRating, RoundBuildResult } from "@/lib/rating-types";
 
-function seedPlayer(id: string, mu: number): PlayerRating {
-  return { id, mu, sigma: 350, volatility: 0.06, gamesPlayed: 0, lastActiveTimestamp: Date.now() };
-}
+async function getJson<T>(path: string): Promise<T> {
+  const response = await fetch(path);
 
-const initialPlayers: PlayerRating[] = [
-  seedPlayer("A", 1600),
-  seedPlayer("B", 1550),
-  seedPlayer("C", 1500),
-  seedPlayer("D", 1480),
-];
+  if (!response.ok) {
+    let message = `Request to ${path} failed (${response.status}).`;
+    try {
+      const data = await response.json();
+      if (data?.error) message = data.error;
+    } catch {
+      // ignore parse failure, keep the default message
+    }
+    throw new Error(message);
+  }
+
+  return response.json() as Promise<T>;
+}
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(path, {
@@ -38,35 +44,42 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export default function Home() {
-  const [players, setPlayers] = useState<Map<string, PlayerRating>>(() => new Map(initialPlayers.map((player) => [player.id, player])));
-  const [activePool, setActivePool] = useState<string[]>(["A", "B", "C", "D"]);
+  const [players, setPlayers] = useState<Map<string, PlayerRating>>(() => new Map());
+  const [activePool, setActivePool] = useState<string[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [newPlayerId, setNewPlayerId] = useState("");
-  const [teamAInput, setTeamAInput] = useState("A,B");
-  const [teamBInput, setTeamBInput] = useState("C,D");
+  const [teamAInput, setTeamAInput] = useState("");
+  const [teamBInput, setTeamBInput] = useState("");
   const [winner, setWinner] = useState<"A" | "B">("A");
   const [roundSummary, setRoundSummary] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Rating computation lives entirely in the external microservice; the
-  // leaderboard here is always whatever it last returned, never computed
-  // locally. Load it once up front for the seeded demo data.
+  // PlayerRating is persistent (Supabase); the leaderboard and all rating
+  // math live entirely in the external microservice. On mount, load the
+  // real roster from Supabase, then ask the microservice to rank it — this
+  // page never computes or stores anything itself.
   useEffect(() => {
     let cancelled = false;
-    postJson<{ leaderboard: LeaderboardEntry[] }>("/api/rating/leaderboard", {
-      players: mapToRecord(players),
-    })
-      .then((data) => {
-        if (!cancelled) setLeaderboard(data.leaderboard);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load leaderboard.");
-      });
+    (async () => {
+      try {
+        const { players: playerRecord } = await getJson<{ players: Record<string, PlayerRating> }>("/api/players");
+        if (cancelled) return;
+        const loadedPlayers = recordToMap(playerRecord);
+        setPlayers(loadedPlayers);
+
+        const { leaderboard: loadedLeaderboard } = await postJson<{ leaderboard: LeaderboardEntry[] }>(
+          "/api/rating/leaderboard",
+          { players: mapToRecord(loadedPlayers) },
+        );
+        if (!cancelled) setLeaderboard(loadedLeaderboard);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load players.");
+      }
+    })();
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const addOrJoin = async (rawId: string) => {
