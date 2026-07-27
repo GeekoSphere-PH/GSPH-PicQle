@@ -219,6 +219,29 @@ export default function Home() {
           {error ? (
             <p className="mt-4 rounded-lg border border-red-800 bg-red-950/50 px-3 py-2 text-sm text-red-300">{error}</p>
           ) : null}
+
+          <div className="mt-4 rounded-xl border border-cyan-900/60 bg-cyan-950/20 p-4 text-sm text-zinc-300">
+            <p className="font-medium text-cyan-300">What do &quot;mu&quot; and &quot;sigma&quot; mean?</p>
+            <ul className="mt-2 space-y-1.5">
+              <li>
+                <span className="font-medium text-zinc-100">mu (μ)</span> — the player&apos;s skill estimate, on the same
+                scale as a normal rating (everyone starts at 1500). Win matches and it goes up; lose and it goes down.
+                Higher mu = the system thinks you&apos;re better.
+              </li>
+              <li>
+                <span className="font-medium text-zinc-100">sigma (σ)</span> — how confident the system is in that mu.
+                It starts high for a brand-new player (we&apos;re guessing) and shrinks as they play more games (we&apos;re
+                sure). It also creeps back up if someone stops playing for a while, since their true skill may have
+                drifted.
+              </li>
+              <li>
+                <span className="font-medium text-zinc-100">Leaderboard rank</span> — uses{" "}
+                <span className="font-mono text-cyan-300">mu − 2×sigma</span> (a &quot;conservative rating&quot;), not raw
+                mu. This stops a new player from jumping to #1 after one lucky win — they need a few games to prove
+                the rating before it counts at full value.
+              </li>
+            </ul>
+          </div>
         </section>
 
         <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
