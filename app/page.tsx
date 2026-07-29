@@ -5,6 +5,16 @@ import { useEffect, useState } from "react";
 import { mapToRecord, recordToMap } from "@/lib/map-utils";
 import type { LeaderboardEntry, PlayerRating, RoundBuildResult, RoundMode } from "@/lib/rating-types";
 
+const ROUND_MODE_EXPLAINERS: Record<RoundMode, string> = {
+  rotation: "Whoever has waited the most rounds gets a guaranteed spot, even if that makes the match less balanced.",
+  rating: "Always picks the closest 4 by rating, regardless of who's waited longest.",
+  strictRotationBestMatch:
+    "Whoever has waited the most rounds gets a guaranteed spot — but among this round's due-up players, teams are grouped to keep ratings as close as possible.",
+};
+
+const COMMIT_SHA = process.env.NEXT_PUBLIC_COMMIT_SHA ?? "unknown";
+const COMMIT_SHA_SHORT = COMMIT_SHA === "unknown" ? "unknown" : COMMIT_SHA.slice(0, 7);
+
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path);
 
@@ -245,7 +255,7 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
+    <main className="min-h-screen bg-zinc-950 p-6 pb-14 text-zinc-100">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-xl">
           <div className="flex items-start justify-between gap-4">
@@ -382,12 +392,8 @@ export default function Home() {
         <section className="grid gap-6 lg:grid-cols-[1fr_1fr]">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
             <h2 className="text-xl font-semibold">Round builder</h2>
-            <p className="mt-2 text-sm text-zinc-400">
-              {roundMode === "rotation"
-                ? "Whoever has waited the most rounds gets a guaranteed spot, even if that makes the match less balanced."
-                : "Always picks the closest 4 by rating, regardless of who's waited longest."}
-            </p>
-            <div className="mt-3 flex gap-3 text-sm">
+            <p className="mt-2 text-sm text-zinc-400">{ROUND_MODE_EXPLAINERS[roundMode]}</p>
+            <div className="mt-3 flex flex-wrap gap-3 text-sm">
               <label className="rounded-lg border border-zinc-700 px-3 py-2">
                 <input
                   type="radio"
@@ -405,6 +411,15 @@ export default function Home() {
                   className="mr-2"
                 />
                 Best rating match
+              </label>
+              <label className="rounded-lg border border-zinc-700 px-3 py-2">
+                <input
+                  type="radio"
+                  checked={roundMode === "strictRotationBestMatch"}
+                  onChange={() => setRoundMode("strictRotationBestMatch")}
+                  className="mr-2"
+                />
+                Strict rotation + Best rating match
               </label>
             </div>
             <button
@@ -498,6 +513,10 @@ export default function Home() {
             </div>
           </div>
         </section>
+      </div>
+
+      <div className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-center bg-[#F44336] px-4 py-2 text-sm font-semibold text-white shadow-[0_-2px_8px_rgba(0,0,0,0.3)]">
+        Live commit: <span className="ml-1.5 font-mono">{COMMIT_SHA_SHORT}</span>
       </div>
     </main>
   );
