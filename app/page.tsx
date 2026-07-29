@@ -12,6 +12,9 @@ const ROUND_MODE_EXPLAINERS: Record<RoundMode, string> = {
     "Whoever has waited the most rounds gets a guaranteed spot — but among this round's due-up players, teams are grouped to keep ratings as close as possible.",
 };
 
+const COMMIT_SHA = process.env.NEXT_PUBLIC_COMMIT_SHA ?? "unknown";
+const COMMIT_SHA_SHORT = COMMIT_SHA === "unknown" ? "unknown" : COMMIT_SHA.slice(0, 7);
+
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path);
 
@@ -252,7 +255,7 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
+    <main className="min-h-screen bg-zinc-950 p-6 pb-14 text-zinc-100">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-xl">
           <div className="flex items-start justify-between gap-4">
@@ -510,6 +513,10 @@ export default function Home() {
             </div>
           </div>
         </section>
+      </div>
+
+      <div className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-center bg-[#F44336] px-4 py-2 text-sm font-semibold text-white shadow-[0_-2px_8px_rgba(0,0,0,0.3)]">
+        Live commit: <span className="ml-1.5 font-mono">{COMMIT_SHA_SHORT}</span>
       </div>
     </main>
   );
