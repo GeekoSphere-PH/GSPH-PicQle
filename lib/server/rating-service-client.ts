@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { mapToRecord, recordToMap } from '@/lib/map-utils';
-import type { LeaderboardEntry, MatchResult, PlayerRating, RoundBuildResult, RoundMode } from '@/lib/rating-types';
+import type { LeaderboardEntry, MatchResult, PlayerRating, RoundBuildResult, RoundMode, VersusMode } from '@/lib/rating-types';
 
 const DEFAULT_TIMEOUT_MS = 25_000;
 
@@ -112,6 +112,7 @@ export async function buildRound(
   courtsAvailable: number,
   roundsWaited: Record<string, number>,
   mode: RoundMode,
+  versusMode: VersusMode,
 ): Promise<RoundBuildResult> {
   return callService<RoundBuildResult>('/build-round', {
     activePool,
@@ -119,6 +120,7 @@ export async function buildRound(
     courtsAvailable,
     roundsWaited,
     mode,
+    versusMode,
   });
 }
 

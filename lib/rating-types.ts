@@ -34,3 +34,9 @@ export type LeaderboardEntry = PlayerRating & {
 // NOTE: this literal must be kept in sync by hand with RoundMode in
 // pickleballq-rating-service/app/models.py -- no shared codegen exists.
 export type RoundMode = "rating" | "rotation" | "strictRotationBestMatch";
+
+// "doubles": 2v2, 4 players per match (default, existing behavior).
+// "singles": 1v1, 2 players per match.
+// NOTE: this literal must be kept in sync by hand with VersusMode in
+// pickleballq-rating-service/app/models.py -- no shared codegen exists.
+export type VersusMode = "singles" | "doubles";
