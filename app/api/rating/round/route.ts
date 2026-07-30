@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { recordToMap } from '@/lib/map-utils';
-import type { PlayerRating, RoundMode } from '@/lib/rating-types';
+import type { PlayerRating, RoundMode, VersusMode } from '@/lib/rating-types';
 import { handleRatingServiceError } from '@/lib/server/handle-rating-error';
 import { buildRound } from '@/lib/server/rating-service-client';
 
@@ -13,6 +13,7 @@ type Body = {
   courtsAvailable?: number;
   roundsWaited?: Record<string, number>;
   mode?: RoundMode;
+  versusMode?: VersusMode;
 };
 
 export async function POST(request: Request) {
@@ -39,6 +40,7 @@ export async function POST(request: Request) {
       body.courtsAvailable,
       body.roundsWaited ?? {},
       body.mode ?? 'rotation',
+      body.versusMode ?? 'doubles',
     );
     return NextResponse.json(result);
   } catch (error) {
