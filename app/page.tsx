@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { mapToRecord, recordToMap } from "@/lib/map-utils";
-import type { LeaderboardEntry, MatchResult, PlayerRating, RoundBuildResult, RoundMode, VersusMode } from "@/lib/rating-types";
+import type { LeaderboardEntry, PlayerRating, RoundBuildResult, RoundMode, VersusMode } from "@/lib/rating-types";
 
 const ROUND_MODE_EXPLAINERS: Record<RoundMode, string> = {
   rotation: "Whoever has waited the most rounds gets a guaranteed spot, even if that makes the match less balanced.",
@@ -20,6 +20,17 @@ const VERSUS_MODE_EXPLAINERS: Record<VersusMode, string> = {
 function matchSizeFor(versusMode: VersusMode): number {
   return versusMode === "singles" ? 2 : 4;
 }
+
+// A court's current match. Locked (no editing/swapping) once built — the
+// only action available is selecting then confirming a winner, which frees
+// the court and pulls in the next match. `id` is client-only (the API's
+// MatchResult has none, and this state never round-trips to the server).
+type ActiveMatch = {
+  id: string;
+  teamA: string[];
+  teamB: string[];
+  selectedWinner?: "A" | "B";
+};
 
 const COMMIT_SHA = process.env.NEXT_PUBLIC_COMMIT_SHA ?? "unknown";
 const COMMIT_SHA_SHORT = COMMIT_SHA === "unknown" ? "unknown" : COMMIT_SHA.slice(0, 7);
@@ -67,10 +78,11 @@ export default function Home() {
   const [activePool, setActivePool] = useState<string[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [newPlayerId, setNewPlayerId] = useState("");
-  const [teamA, setTeamA] = useState<string[]>([]);
-  const [teamB, setTeamB] = useState<string[]>([]);
-  const [winner, setWinner] = useState<"A" | "B">("A");
-  const [pendingMatches, setPendingMatches] = useState<MatchResult[]>([]);
+  // Fixed-position court slots — index is the court's on-screen position,
+  // which never shifts. `null` means idle/waiting; confirming a match nulls
+  // its slot in place rather than removing it, so the next match that fills
+  // it lands in the same spot instead of the list re-flowing.
+  const [courtSlots, setCourtSlots] = useState<(ActiveMatch | null)[]>(() => [null]);
   const [roundsWaited, setRoundsWaited] = useState<Record<string, number>>({});
   const [roundMode, setRoundMode] = useState<RoundMode>("rotation");
   const [versusMode, setVersusMode] = useState<VersusMode>("doubles");
@@ -105,24 +117,37 @@ export default function Home() {
     };
   }, []);
 
-  const addOrJoin = async (rawId: string) => {
-    const id = rawId.trim();
-    if (!id || activePool.includes(id) || isBusy) return;
+  // Accepts one id or a comma-separated batch (e.g. "p1, p2, p3"). Joins are
+  // sent one at a time, each using the previous join's freshly-returned pool
+  // and player map (not the outer closure, which won't see earlier joins in
+  // this same batch until the next render) — this keeps each new player's
+  // seeded rating based on the pool average correct as the batch progresses.
+  const addPlayers = async (rawInput: string) => {
+    const ids = Array.from(new Set(rawInput.split(",").map((s) => s.trim()).filter(Boolean)));
+    if (ids.length === 0 || isBusy) return;
 
     setIsBusy(true);
     setError(null);
     try {
-      const data = await postJson<{
-        player: PlayerRating;
-        activePool: string[];
-        players: Record<string, PlayerRating>;
-        leaderboard: LeaderboardEntry[];
-      }>("/api/rating/join", { playerId: id, activePool, players: mapToRecord(players) });
+      let currentPool = activePool;
+      let currentPlayers = players;
+      for (const id of ids) {
+        if (currentPool.includes(id)) continue;
 
-      setPlayers(recordToMap(data.players));
-      setActivePool(data.activePool);
-      setLeaderboard(data.leaderboard);
-      maybeAutoBuild(data.activePool);
+        const data = await postJson<{
+          player: PlayerRating;
+          activePool: string[];
+          players: Record<string, PlayerRating>;
+          leaderboard: LeaderboardEntry[];
+        }>("/api/rating/join", { playerId: id, activePool: currentPool, players: mapToRecord(currentPlayers) });
+
+        currentPlayers = recordToMap(data.players);
+        currentPool = data.activePool;
+        setPlayers(currentPlayers);
+        setActivePool(currentPool);
+        setLeaderboard(data.leaderboard);
+      }
+      topUpCourts(currentPool);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to join queue.");
     } finally {
@@ -131,12 +156,12 @@ export default function Home() {
   };
 
   const addPlayer = async () => {
-    await addOrJoin(newPlayerId);
+    await addPlayers(newPlayerId);
     setNewPlayerId("");
   };
 
   const joinQueue = async (playerId: string) => {
-    await addOrJoin(playerId);
+    await addPlayers(playerId);
   };
 
   const leaveQueue = async (playerId: string) => {
@@ -183,18 +208,32 @@ export default function Home() {
         mode: roundMode,
         versusMode: versusModeToUse,
       });
-      setPendingMatches(data.matches);
+      // Each newly-built match fills the first still-idle (null) slot(s), in
+      // court order, so it lands wherever a court most recently freed up
+      // rather than at the end of the list. courtsToUse (the number of open
+      // slots requested, not necessarily the global courts setting) bounds
+      // how many come back here, so this should never run out of null slots
+      // to fill — the `while` below is just a defensive fallback.
+      const newCards: ActiveMatch[] = data.matches.map((match) => ({ ...match, id: crypto.randomUUID() }));
+      setCourtSlots((current) => {
+        const next = [...current];
+        let cardIndex = 0;
+        for (let i = 0; i < next.length && cardIndex < newCards.length; i++) {
+          if (next[i] === null) {
+            next[i] = newCards[cardIndex];
+            cardIndex++;
+          }
+        }
+        while (cardIndex < newCards.length) {
+          next.push(newCards[cardIndex]);
+          cardIndex++;
+        }
+        return next;
+      });
       // Matched players are now on a court, not queued; leftover carries into
       // the next rotation per the reference spec.
       setActivePool(data.leftover);
       setRoundsWaited(data.roundsWaited);
-
-      // Carry the built match straight into the "Apply match result" panel
-      // as chips, so there's no manual retyping of ids.
-      if (data.matches.length > 0) {
-        setTeamA(data.matches[0].teamA);
-        setTeamB(data.matches[0].teamB);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to build round.");
     } finally {
@@ -202,76 +241,81 @@ export default function Home() {
     }
   };
 
-  // Triggers the next round automatically whenever a queue-changing action
-  // (join, apply match result, versus-mode change) leaves enough players
-  // queued for at least one match and no round is already pending — this is
-  // what makes round-building "continuous" without a manual button press.
-  // Called from event handlers (not an effect) so state updates from the
-  // triggering action are passed in directly rather than read stale.
-  const maybeAutoBuild = (
+  // Tops up any open (null) court slots whenever a queue-changing action
+  // (join, confirming a match, a settings change) leaves room for another
+  // match — this is what makes round-building "continuous" without a manual
+  // button press, and lets one freed court refill independently of any other
+  // still in-progress court. Called from event handlers (not an effect) so
+  // state updates from the triggering action are passed in directly rather
+  // than read stale.
+  const topUpCourts = (
     pool: string[],
-    options?: { versusMode?: VersusMode; courtsAvailable?: number; pendingMatches?: MatchResult[] },
+    options?: { versusMode?: VersusMode; courtSlots?: (ActiveMatch | null)[] },
   ) => {
     const mode = options?.versusMode ?? versusMode;
-    const courts = options?.courtsAvailable ?? courtsAvailable;
-    const pending = options?.pendingMatches ?? pendingMatches;
-    if (pending.length > 0 || courts <= 0 || pool.length < matchSizeFor(mode)) return;
-    void buildRound({ activePool: pool, versusMode: mode, courtsAvailable: courts });
+    const slots = options?.courtSlots ?? courtSlots;
+    const freeSlots = slots.filter((slot) => slot === null).length;
+    if (freeSlots <= 0 || pool.length < matchSizeFor(mode)) return;
+    void buildRound({ activePool: pool, versusMode: mode, courtsAvailable: freeSlots });
   };
 
   const changeVersusMode = (next: VersusMode) => {
     if (isBusy) return;
-    if (pendingMatches.length > 0) {
-      // Discard the round built under the old versus mode and return those
-      // players to the queue, then immediately try to rebuild sized for the
-      // new mode.
-      const returning = pendingMatches.flatMap((match) => [...match.teamA, ...match.teamB]);
-      const newPool = [...activePool, ...returning.filter((id) => !activePool.includes(id))];
-      setActivePool(newPool);
-      setPendingMatches([]);
-      setTeamA([]);
-      setTeamB([]);
-      setVersusMode(next);
-      maybeAutoBuild(newPool, { versusMode: next, pendingMatches: [] });
-    } else {
-      setVersusMode(next);
-      maybeAutoBuild(activePool, { versusMode: next });
-    }
+    // Active matches are locked in once built — a versus-mode change only
+    // affects what gets built into any open courts, never matches already
+    // on the board.
+    setVersusMode(next);
+    topUpCourts(activePool, { versusMode: next });
   };
 
-  const applyMatch = async () => {
-    if (teamA.length === 0 || teamB.length === 0 || isBusy) return;
+  const changeCourtsAvailable = (next: number) => {
+    setCourtsAvailable(next);
+
+    let updatedSlots = courtSlots;
+    if (next > courtSlots.length) {
+      updatedSlots = [...courtSlots, ...Array<null>(next - courtSlots.length).fill(null)];
+    } else if (next < courtSlots.length) {
+      // Trim idle slots off the end down to the target count. Active
+      // matches are locked in and never forcibly removed, so if there
+      // aren't enough trailing idle slots to reach the target, the board
+      // temporarily stays larger than `courtsAvailable` until those finish.
+      const trimmed = [...courtSlots];
+      while (trimmed.length > next && trimmed[trimmed.length - 1] === null) {
+        trimmed.pop();
+      }
+      updatedSlots = trimmed;
+    }
+    setCourtSlots(updatedSlots);
+    topUpCourts(activePool, { courtSlots: updatedSlots });
+  };
+
+  const selectWinner = (matchId: string, winner: "A" | "B") => {
+    setCourtSlots((current) => current.map((slot) => (slot?.id === matchId ? { ...slot, selectedWinner: winner } : slot)));
+  };
+
+  const confirmMatch = async (match: ActiveMatch) => {
+    if (isBusy || !match.selectedWinner) return;
 
     setIsBusy(true);
     setError(null);
     try {
       const data = await postJson<{ players: Record<string, PlayerRating>; leaderboard: LeaderboardEntry[] }>(
         "/api/rating/match",
-        { matchResult: { teamA, teamB, winner }, players: mapToRecord(players) },
+        { matchResult: { teamA: match.teamA, teamB: match.teamB, winner: match.selectedWinner }, players: mapToRecord(players) },
       );
       setPlayers(recordToMap(data.players));
       setLeaderboard(data.leaderboard);
 
       // Players return to the queue once their match is done.
-      const returning = [...teamA, ...teamB].filter((id) => !activePool.includes(id));
+      const returning = [...match.teamA, ...match.teamB].filter((id) => !activePool.includes(id));
       const newPool = [...activePool, ...returning];
       setActivePool(newPool);
 
-      // Drop the resolved match off the pending queue (FIFO — good enough
-      // for this minimal demo UI, no need to match the applied teams back
-      // to their exact origin slot) and auto-fill the next pending match,
-      // if any, into the apply panel. Once this empties, the next round
-      // builds automatically.
-      const remainingMatches = pendingMatches.slice(1);
-      setPendingMatches(remainingMatches);
-      if (remainingMatches.length > 0) {
-        setTeamA(remainingMatches[0].teamA);
-        setTeamB(remainingMatches[0].teamB);
-      } else {
-        setTeamA([]);
-        setTeamB([]);
-      }
-      maybeAutoBuild(newPool, { pendingMatches: remainingMatches });
+      // Free this match's slot in place — it keeps its board position; only
+      // the content changes once the next match fills back into it.
+      const clearedSlots = courtSlots.map((slot) => (slot?.id === match.id ? null : slot));
+      setCourtSlots(clearedSlots);
+      topUpCourts(newPool, { courtSlots: clearedSlots });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to apply match result.");
     } finally {
@@ -304,26 +348,13 @@ export default function Home() {
       setPlayers(new Map());
       setActivePool([]);
       setLeaderboard([]);
-      setPendingMatches([]);
+      setCourtSlots(Array<null>(courtsAvailable).fill(null));
       setRoundsWaited({});
-      setTeamA([]);
-      setTeamB([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to reset data.");
     } finally {
       setIsBusy(false);
     }
-  };
-
-  const removeFromTeam = (team: "A" | "B", playerId: string) => {
-    const setter = team === "A" ? setTeamA : setTeamB;
-    setter((current) => current.filter((id) => id !== playerId));
-  };
-
-  const addToTeam = (team: "A" | "B", playerId: string) => {
-    if (!playerId) return;
-    const setter = team === "A" ? setTeamA : setTeamB;
-    setter((current) => (current.includes(playerId) ? current : [...current, playerId]));
   };
 
   return (
@@ -384,7 +415,10 @@ export default function Home() {
                 <input
                   value={newPlayerId}
                   onChange={(event) => setNewPlayerId(event.target.value)}
-                  placeholder="Add player"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") addPlayer();
+                  }}
+                  placeholder="Add players, comma-separated"
                   disabled={isBusy}
                   className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm disabled:opacity-50"
                 />
@@ -523,7 +557,7 @@ export default function Home() {
                   type="number"
                   min={1}
                   value={courtsAvailable}
-                  onChange={(event) => setCourtsAvailable(Math.max(1, Number(event.target.value) || 1))}
+                  onChange={(event) => changeCourtsAvailable(Math.max(1, Number(event.target.value) || 1))}
                   disabled={isBusy}
                   className="w-16 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm disabled:opacity-50"
                 />
@@ -531,95 +565,71 @@ export default function Home() {
             </div>
 
             <button
-              onClick={() => buildRound()}
+              onClick={() => topUpCourts(activePool)}
               disabled={isBusy}
               className="mt-4 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium disabled:opacity-50"
             >
-              Force rebuild now
+              Fill open courts now
             </button>
             <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
               <p className="text-sm text-zinc-400">Current queue</p>
-              <p className="mt-2 font-medium">{activePool.join(" → ")}</p>
-              {pendingMatches.length > 0 ? (
-                <ul className="mt-4 space-y-2 text-sm text-zinc-300">
-                  {pendingMatches.map((match, index) => (
-                    <li key={index} className="rounded-lg border border-zinc-800 px-3 py-2">
-                      {match.teamA.join(", ")} vs {match.teamB.join(", ")}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="mt-4 text-sm text-zinc-500">No round built yet.</p>
-              )}
+              <p className="mt-2 font-medium">{activePool.join(" → ") || "(empty)"}</p>
             </div>
           </div>
 
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-            <h2 className="text-xl font-semibold">Apply match result</h2>
-            <p className="mt-2 text-sm text-zinc-400">Filled in automatically from the last built round — add, remove, or swap players below if needed.</p>
+            <h2 className="text-xl font-semibold">Status board</h2>
+            <p className="mt-2 text-sm text-zinc-400">
+              Active matches are locked until you select a winner and confirm — confirming frees the court and pulls in the next match from the queue.
+            </p>
             <div className="mt-4 space-y-4">
-              {(["A", "B"] as const).map((team) => {
-                const members = team === "A" ? teamA : teamB;
-                const otherMembers = team === "A" ? teamB : teamA;
-                const available = Array.from(players.keys()).filter(
-                  (id) => !members.includes(id) && !otherMembers.includes(id),
-                );
-                return (
-                  <div key={team}>
-                    <p className="text-sm">Team {team}</p>
-                    <div className="mt-1 flex min-h-9 flex-wrap items-center gap-2">
-                      {members.map((id) => (
-                        <span
-                          key={id}
-                          className="inline-flex items-center gap-1.5 rounded-full bg-cyan-600/20 px-3 py-1 text-xs text-cyan-300"
-                        >
-                          {id}
-                          <button
-                            type="button"
-                            onClick={() => removeFromTeam(team, id)}
+              {courtSlots.map((match, index) => (
+                // Keyed by court position (not match id) so a slot's DOM node
+                // is reused in place when its match changes — this is what
+                // keeps the board from re-flowing when a court finishes.
+                <div key={index}>
+                  {match ? (
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+                      <p className="text-sm text-zinc-300">
+                        {match.teamA.join(", ")} <span className="text-zinc-500">vs</span> {match.teamB.join(", ")}
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-3 text-sm">
+                        <label className="rounded-lg border border-zinc-700 px-3 py-2">
+                          <input
+                            type="radio"
+                            checked={match.selectedWinner === "A"}
+                            onChange={() => selectWinner(match.id, "A")}
                             disabled={isBusy}
-                            aria-label={`Remove ${id} from Team ${team}`}
-                            className="text-cyan-400 hover:text-cyan-100 disabled:opacity-50"
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                      {members.length === 0 ? <span className="text-xs text-zinc-500">No players yet</span> : null}
+                            className="mr-2"
+                          />
+                          {match.teamA.join(", ")} won
+                        </label>
+                        <label className="rounded-lg border border-zinc-700 px-3 py-2">
+                          <input
+                            type="radio"
+                            checked={match.selectedWinner === "B"}
+                            onChange={() => selectWinner(match.id, "B")}
+                            disabled={isBusy}
+                            className="mr-2"
+                          />
+                          {match.teamB.join(", ")} won
+                        </label>
+                      </div>
+                      <button
+                        onClick={() => confirmMatch(match)}
+                        disabled={isBusy || !match.selectedWinner}
+                        className="mt-3 rounded-lg bg-cyan-600 px-3 py-2 text-sm font-medium disabled:opacity-50"
+                      >
+                        Confirm result
+                      </button>
                     </div>
-                    <select
-                      value=""
-                      disabled={isBusy || available.length === 0}
-                      onChange={(event) => addToTeam(team, event.target.value)}
-                      className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm disabled:opacity-50"
-                    >
-                      <option value="">+ Add player to Team {team}</option>
-                      {available.map((id) => (
-                        <option key={id} value={id}>
-                          {id}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                );
-              })}
-              <div className="flex gap-3 text-sm">
-                <label className="rounded-lg border border-zinc-700 px-3 py-2">
-                  <input type="radio" checked={winner === "A"} onChange={() => setWinner("A")} className="mr-2" />
-                  Team A wins
-                </label>
-                <label className="rounded-lg border border-zinc-700 px-3 py-2">
-                  <input type="radio" checked={winner === "B"} onChange={() => setWinner("B")} className="mr-2" />
-                  Team B wins
-                </label>
-              </div>
-              <button
-                onClick={applyMatch}
-                disabled={isBusy}
-                className="rounded-lg bg-cyan-600 px-3 py-2 text-sm font-medium disabled:opacity-50"
-              >
-                Apply rating update
-              </button>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40 p-4 text-sm text-zinc-500">
+                      Waiting for players…
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         </section>
