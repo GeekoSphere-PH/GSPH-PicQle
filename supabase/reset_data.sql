@@ -6,4 +6,4 @@
 -- tables. Run in the Supabase SQL editor only when you actually mean to
 -- wipe the data (e.g. clearing out test rows before going live).
 
-truncate table public.matches, public.players;
+truncate table public.matches, public.players, public.game_sessions;
