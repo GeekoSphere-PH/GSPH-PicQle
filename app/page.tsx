@@ -328,12 +328,12 @@ export default function Home() {
         courtsAvailable,
       });
       setGameSession(data.session);
-      setCourtSlots((current) =>
-        current.length < courtsAvailable
-          ? [...current, ...Array<null>(courtsAvailable - current.length).fill(null)]
-          : current,
-      );
-      topUpCourts(activePool, { gameSession: data.session });
+      const paddedSlots =
+        courtSlots.length < courtsAvailable
+          ? [...courtSlots, ...Array<null>(courtsAvailable - courtSlots.length).fill(null)]
+          : courtSlots;
+      setCourtSlots(paddedSlots);
+      topUpCourts(activePool, { gameSession: data.session, courtSlots: paddedSlots });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start game.");
     } finally {
