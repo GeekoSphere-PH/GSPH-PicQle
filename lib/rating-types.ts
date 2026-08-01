@@ -40,3 +40,15 @@ export type RoundMode = "rating" | "rotation" | "strictRotationBestMatch";
 // NOTE: this literal must be kept in sync by hand with VersusMode in
 // pickleballq-rating-service/app/models.py -- no shared codegen exists.
 export type VersusMode = "singles" | "doubles";
+
+// A "game profile setting" session: Start locks in roundMode/versusMode/
+// courtsAvailable and records startedAt; Stop records endedAt and unlocks
+// them again. endedAt is null while the session is active.
+export type GameSession = {
+  id: string;
+  roundMode: RoundMode;
+  versusMode: VersusMode;
+  courtsAvailable: number;
+  startedAt: string;
+  endedAt: string | null;
+};

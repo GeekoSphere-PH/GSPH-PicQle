@@ -19,3 +19,13 @@ export type MatchRow = {
   winner: 'A' | 'B';
   created_at: string;
 };
+
+export type GameSessionRow = {
+  id: string;
+  round_mode: string;
+  versus_mode: string;
+  courts_available: number;
+  started_at: string;
+  ended_at: string | null;
+  created_at: string;
+};

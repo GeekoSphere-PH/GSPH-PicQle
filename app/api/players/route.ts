@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { mapToRecord } from '@/lib/map-utils';
+import { deleteAllGameSessions } from '@/lib/server/game-session-repository';
 import { deleteAllData, loadAllPlayers } from '@/lib/server/player-repository';
 
 export async function GET() {
@@ -18,6 +19,7 @@ export async function GET() {
 export async function DELETE() {
   try {
     await deleteAllData();
+    await deleteAllGameSessions();
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error('Failed to reset players/matches in Supabase:', error);

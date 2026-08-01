@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { mapToRecord, recordToMap } from "@/lib/map-utils";
-import type { LeaderboardEntry, PlayerRating, RoundBuildResult, RoundMode, VersusMode } from "@/lib/rating-types";
+import type { GameSession, LeaderboardEntry, PlayerRating, RoundBuildResult, RoundMode, VersusMode } from "@/lib/rating-types";
 
 const ROUND_MODE_EXPLAINERS: Record<RoundMode, string> = {
   rotation: "Whoever has waited the most rounds gets a guaranteed spot, even if that makes the match less balanced.",
@@ -87,6 +87,11 @@ export default function Home() {
   const [roundMode, setRoundMode] = useState<RoundMode>("rotation");
   const [versusMode, setVersusMode] = useState<VersusMode>("doubles");
   const [courtsAvailable, setCourtsAvailable] = useState(1);
+  // Non-null while a game is Started — locks roundMode/versusMode/
+  // courtsAvailable from editing and gates auto round-building (see
+  // topUpCourts). Persisted server-side so a page refresh mid-session
+  // restores the lock instead of resetting to defaults.
+  const [gameSession, setGameSession] = useState<GameSession | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -108,6 +113,21 @@ export default function Home() {
           { players: mapToRecord(loadedPlayers) },
         );
         if (!cancelled) setLeaderboard(loadedLeaderboard);
+
+        // If a game is already Started (e.g. another tab, or this page was
+        // refreshed mid-session), restore the lock and the settings it
+        // locked in instead of showing the defaults.
+        const { session } = await getJson<{ session: GameSession | null }>("/api/game-session");
+        if (cancelled || !session) return;
+        setGameSession(session);
+        setRoundMode(session.roundMode);
+        setVersusMode(session.versusMode);
+        setCourtsAvailable(session.courtsAvailable);
+        setCourtSlots((current) =>
+          current.length < session.courtsAvailable
+            ? [...current, ...Array<null>(session.courtsAvailable - current.length).fill(null)]
+            : current,
+        );
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load players.");
       }
@@ -250,8 +270,15 @@ export default function Home() {
   // than read stale.
   const topUpCourts = (
     pool: string[],
-    options?: { versusMode?: VersusMode; courtSlots?: (ActiveMatch | null)[] },
+    options?: { versusMode?: VersusMode; courtSlots?: (ActiveMatch | null)[]; gameSession?: GameSession | null },
   ) => {
+    // No auto-building outside a Started game — settings aren't locked in
+    // yet, so there's nothing to build against. `options.gameSession` lets
+    // callers pass a freshly-known value (e.g. right after starting) since
+    // the `gameSession` state closure won't see it until the next render.
+    const session = options && "gameSession" in options ? options.gameSession : gameSession;
+    if (!session) return;
+
     const mode = options?.versusMode ?? versusMode;
     const slots = options?.courtSlots ?? courtSlots;
     const freeSlots = slots.filter((slot) => slot === null).length;
@@ -289,6 +316,51 @@ export default function Home() {
     topUpCourts(activePool, { courtSlots: updatedSlots });
   };
 
+  const startGame = async () => {
+    if (isBusy || gameSession) return;
+
+    setIsBusy(true);
+    setError(null);
+    try {
+      const data = await postJson<{ session: GameSession }>("/api/game-session", {
+        roundMode,
+        versusMode,
+        courtsAvailable,
+      });
+      setGameSession(data.session);
+      const paddedSlots =
+        courtSlots.length < courtsAvailable
+          ? [...courtSlots, ...Array<null>(courtsAvailable - courtSlots.length).fill(null)]
+          : courtSlots;
+      setCourtSlots(paddedSlots);
+      topUpCourts(activePool, { gameSession: data.session, courtSlots: paddedSlots });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start game.");
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const stopGame = async () => {
+    if (isBusy || !gameSession) return;
+
+    setIsBusy(true);
+    setError(null);
+    try {
+      await postJson("/api/game-session/stop", { sessionId: gameSession.id });
+      setGameSession(null);
+      setActivePool([]);
+      // Drop idle placeholders — nothing will auto-fill them until Start
+      // again. In-progress matches are left as-is; they can still be
+      // selected and confirmed.
+      setCourtSlots((current) => current.filter((slot) => slot !== null));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to stop game.");
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const selectWinner = (matchId: string, winner: "A" | "B") => {
     setCourtSlots((current) => current.map((slot) => (slot?.id === matchId ? { ...slot, selectedWinner: winner } : slot)));
   };
@@ -312,8 +384,13 @@ export default function Home() {
       setActivePool(newPool);
 
       // Free this match's slot in place — it keeps its board position; only
-      // the content changes once the next match fills back into it.
-      const clearedSlots = courtSlots.map((slot) => (slot?.id === match.id ? null : slot));
+      // the content changes once the next match fills back into it. If no
+      // game is Started, though, nothing will ever fill it again, so drop
+      // the now-idle slot entirely rather than leaving a dangling
+      // "Waiting for players…" placeholder.
+      const clearedSlots = courtSlots
+        .map((slot) => (slot?.id === match.id ? null : slot))
+        .filter((slot) => gameSession !== null || slot !== null);
       setCourtSlots(clearedSlots);
       topUpCourts(newPool, { courtSlots: clearedSlots });
     } catch (err) {
@@ -350,6 +427,7 @@ export default function Home() {
       setLeaderboard([]);
       setCourtSlots(Array<null>(courtsAvailable).fill(null));
       setRoundsWaited({});
+      setGameSession(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to reset data.");
     } finally {
@@ -497,14 +575,42 @@ export default function Home() {
 
         <section className="grid gap-6 lg:grid-cols-[1fr_1fr]">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-            <h2 className="text-xl font-semibold">Round builder</h2>
-            <p className="mt-2 text-sm text-zinc-400">{ROUND_MODE_EXPLAINERS[roundMode]}</p>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-semibold">Game Profile Setting</h2>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {gameSession
+                    ? `Started ${new Date(gameSession.startedAt).toLocaleTimeString()} — settings locked until Stop.`
+                    : "Settings are editable until you Start."}
+                </p>
+              </div>
+              {gameSession ? (
+                <button
+                  onClick={stopGame}
+                  disabled={isBusy}
+                  className="shrink-0 rounded-lg bg-red-700 px-3 py-2 text-sm font-medium disabled:opacity-50"
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  onClick={startGame}
+                  disabled={isBusy}
+                  className="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium disabled:opacity-50"
+                >
+                  Start
+                </button>
+              )}
+            </div>
+
+            <p className="mt-4 text-sm text-zinc-400">{ROUND_MODE_EXPLAINERS[roundMode]}</p>
             <div className="mt-3 flex flex-wrap gap-3 text-sm">
               <label className="rounded-lg border border-zinc-700 px-3 py-2">
                 <input
                   type="radio"
                   checked={roundMode === "rotation"}
                   onChange={() => setRoundMode("rotation")}
+                  disabled={isBusy || gameSession !== null}
                   className="mr-2"
                 />
                 Fair rotation
@@ -514,6 +620,7 @@ export default function Home() {
                   type="radio"
                   checked={roundMode === "rating"}
                   onChange={() => setRoundMode("rating")}
+                  disabled={isBusy || gameSession !== null}
                   className="mr-2"
                 />
                 Best rating match
@@ -523,6 +630,7 @@ export default function Home() {
                   type="radio"
                   checked={roundMode === "strictRotationBestMatch"}
                   onChange={() => setRoundMode("strictRotationBestMatch")}
+                  disabled={isBusy || gameSession !== null}
                   className="mr-2"
                 />
                 Strict rotation + Best rating match
@@ -536,7 +644,7 @@ export default function Home() {
                   type="radio"
                   checked={versusMode === "doubles"}
                   onChange={() => changeVersusMode("doubles")}
-                  disabled={isBusy}
+                  disabled={isBusy || gameSession !== null}
                   className="mr-2"
                 />
                 Doubles
@@ -546,7 +654,7 @@ export default function Home() {
                   type="radio"
                   checked={versusMode === "singles"}
                   onChange={() => changeVersusMode("singles")}
-                  disabled={isBusy}
+                  disabled={isBusy || gameSession !== null}
                   className="mr-2"
                 />
                 Singles
@@ -558,7 +666,7 @@ export default function Home() {
                   min={1}
                   value={courtsAvailable}
                   onChange={(event) => changeCourtsAvailable(Math.max(1, Number(event.target.value) || 1))}
-                  disabled={isBusy}
+                  disabled={isBusy || gameSession !== null}
                   className="w-16 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm disabled:opacity-50"
                 />
               </label>
@@ -566,7 +674,7 @@ export default function Home() {
 
             <button
               onClick={() => topUpCourts(activePool)}
-              disabled={isBusy}
+              disabled={isBusy || !gameSession}
               className="mt-4 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium disabled:opacity-50"
             >
               Fill open courts now

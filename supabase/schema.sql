@@ -28,6 +28,20 @@ create table if not exists public.matches (
   created_at timestamptz not null default now()
 );
 
+-- A "game profile setting" session: the round/versus mode and courts count
+-- locked in by Start, and when that lock was released by Stop. `ended_at`
+-- null means the session is still active — at most one such row should
+-- exist at a time (enforced app-side, not by a DB constraint).
+create table if not exists public.game_sessions (
+  id uuid primary key default gen_random_uuid(),
+  round_mode text not null,
+  versus_mode text not null,
+  courts_available integer not null,
+  started_at timestamptz not null default now(),
+  ended_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
 -- RLS stays enabled with no policies defined below: this denies all access
 -- to the anon and authenticated roles. Only the Supabase service role key
 -- can read/write these tables, since the service role always bypasses RLS
@@ -36,3 +50,4 @@ create table if not exists public.matches (
 -- should ever query these tables, using SUPABASE_SERVICE_ROLE_KEY.
 alter table public.players enable row level security;
 alter table public.matches enable row level security;
+alter table public.game_sessions enable row level security;
