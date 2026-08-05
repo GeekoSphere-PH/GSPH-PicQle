@@ -735,38 +735,53 @@ export default function Home() {
             </div>
 
             <p className="mt-4 text-sm text-zinc-400">{VERSUS_MODE_EXPLAINERS[versusMode]}</p>
-            <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
-              <label className="rounded-lg border border-zinc-700 px-3 py-2">
-                <input
-                  type="radio"
-                  checked={versusMode === "doubles"}
-                  onChange={() => changeVersusMode("doubles")}
-                  disabled={isBusy || gameSession !== null}
-                  className="mr-2"
-                />
+            <div className="mt-3 flex flex-wrap gap-3 text-sm">
+              <button
+                type="button"
+                onClick={() => changeVersusMode("doubles")}
+                disabled={isBusy || gameSession !== null}
+                className={`rounded-lg border px-4 py-2 font-medium transition-colors disabled:opacity-50 ${
+                  versusMode === "doubles"
+                    ? "border-cyan-500 bg-cyan-600 text-white"
+                    : "border-zinc-700 bg-zinc-800 text-zinc-400"
+                }`}
+              >
                 Doubles
-              </label>
-              <label className="rounded-lg border border-zinc-700 px-3 py-2">
-                <input
-                  type="radio"
-                  checked={versusMode === "singles"}
-                  onChange={() => changeVersusMode("singles")}
-                  disabled={isBusy || gameSession !== null}
-                  className="mr-2"
-                />
+              </button>
+              <button
+                type="button"
+                onClick={() => changeVersusMode("singles")}
+                disabled={isBusy || gameSession !== null}
+                className={`rounded-lg border px-4 py-2 font-medium transition-colors disabled:opacity-50 ${
+                  versusMode === "singles"
+                    ? "border-cyan-500 bg-cyan-600 text-white"
+                    : "border-zinc-700 bg-zinc-800 text-zinc-400"
+                }`}
+              >
                 Singles
-              </label>
-              <label className="flex items-center gap-2 rounded-lg border border-zinc-700 px-3 py-2">
-                Courts
+              </button>
+            </div>
+
+            <div className="mt-3 flex items-center gap-3 text-sm">
+              <span className="shrink-0 text-zinc-400">Courts</span>
+              <div className="relative max-w-xs flex-1">
                 <input
-                  type="number"
+                  type="range"
                   min={1}
+                  max={10}
+                  step={1}
                   value={courtsAvailable}
-                  onChange={(event) => changeCourtsAvailable(Math.max(1, Number(event.target.value) || 1))}
+                  onChange={(event) => changeCourtsAvailable(Number(event.target.value))}
                   disabled={isBusy || gameSession !== null}
-                  className="w-16 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm disabled:opacity-50"
+                  className="w-full accent-cyan-500 disabled:opacity-50"
                 />
-              </label>
+                <div className="pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-between px-[9px]">
+                  {Array.from({ length: 10 }, (_, i) => (
+                    <span key={i} className="h-2 w-px bg-zinc-950/70" />
+                  ))}
+                </div>
+              </div>
+              <span className="w-4 shrink-0 text-right font-semibold text-cyan-400 tabular-nums">{courtsAvailable}</span>
             </div>
 
             <button
