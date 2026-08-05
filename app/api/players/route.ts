@@ -2,12 +2,13 @@ import { NextResponse } from 'next/server';
 
 import { mapToRecord } from '@/lib/map-utils';
 import { deleteAllGameSessions } from '@/lib/server/game-session-repository';
-import { deleteAllData, loadAllPlayers } from '@/lib/server/player-repository';
+import { deleteAllData, loadAllPlayers, loadMatchStats } from '@/lib/server/player-repository';
 
 export async function GET() {
   try {
     const players = await loadAllPlayers();
-    return NextResponse.json({ players: mapToRecord(players) });
+    const matchStats = await loadMatchStats();
+    return NextResponse.json({ players: mapToRecord(players), matchStats });
   } catch (error) {
     console.error('Failed to load players from Supabase:', error);
     return NextResponse.json({ error: 'Failed to load players.' }, { status: 502 });

@@ -23,6 +23,11 @@ export type LeaderboardEntry = PlayerRating & {
   conservativeRating: number;
 };
 
+export type MatchStats = {
+  wins: number;
+  matchesPlayed: number;
+};
+
 // "rotation": whoever's waited the most rounds gets a guaranteed spot next,
 // even if that makes the match less balanced by rating. "rating": always
 // pick the closest-by-rating group (the original behavior).

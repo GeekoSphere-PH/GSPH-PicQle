@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { mapToRecord, recordToMap } from '@/lib/map-utils';
 import type { MatchResult, PlayerRating } from '@/lib/rating-types';
 import { handleRatingServiceError } from '@/lib/server/handle-rating-error';
-import { recordMatch, upsertPlayers } from '@/lib/server/player-repository';
+import { loadMatchStats, recordMatch, upsertPlayers } from '@/lib/server/player-repository';
 import { updateMatchRatings } from '@/lib/server/rating-service-client';
 
 export const maxDuration = 30;
@@ -49,9 +49,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Rating computed but failed to save. Please retry.' }, { status: 502 });
     }
 
+    const matchStats = await loadMatchStats();
+
     return NextResponse.json({
       players: mapToRecord(result.players),
       leaderboard: result.leaderboard,
+      matchStats,
     });
   } catch (error) {
     return handleRatingServiceError(error);
