@@ -701,72 +701,76 @@ export default function Home() {
             </div>
 
             <p className="mt-4 text-sm text-zinc-400">{ROUND_MODE_EXPLAINERS[roundMode]}</p>
-            <div className="mt-3 flex flex-wrap gap-3 text-sm">
-              <label className="rounded-lg border border-zinc-700 px-3 py-2">
-                <input
-                  type="radio"
-                  checked={roundMode === "rotation"}
-                  onChange={() => setRoundMode("rotation")}
-                  disabled={isBusy || gameSession !== null}
-                  className="mr-2"
-                />
+            <div className="mt-3 grid grid-cols-3 divide-x divide-zinc-700 overflow-hidden rounded-lg border border-zinc-700 text-sm">
+              <button
+                type="button"
+                onClick={() => setRoundMode("rotation")}
+                disabled={isBusy || gameSession !== null}
+                className={`px-3 py-2 text-center font-medium transition-colors disabled:opacity-50 ${
+                  roundMode === "rotation" ? "bg-cyan-600 text-white" : "bg-zinc-800 text-zinc-400"
+                }`}
+              >
                 Fair rotation
-              </label>
-              <label className="rounded-lg border border-zinc-700 px-3 py-2">
-                <input
-                  type="radio"
-                  checked={roundMode === "rating"}
-                  onChange={() => setRoundMode("rating")}
-                  disabled={isBusy || gameSession !== null}
-                  className="mr-2"
-                />
+              </button>
+              <button
+                type="button"
+                onClick={() => setRoundMode("rating")}
+                disabled={isBusy || gameSession !== null}
+                className={`px-3 py-2 text-center font-medium transition-colors disabled:opacity-50 ${
+                  roundMode === "rating" ? "bg-cyan-600 text-white" : "bg-zinc-800 text-zinc-400"
+                }`}
+              >
                 Best rating match
-              </label>
-              <label className="rounded-lg border border-zinc-700 px-3 py-2">
-                <input
-                  type="radio"
-                  checked={roundMode === "strictRotationBestMatch"}
-                  onChange={() => setRoundMode("strictRotationBestMatch")}
-                  disabled={isBusy || gameSession !== null}
-                  className="mr-2"
-                />
+              </button>
+              <button
+                type="button"
+                onClick={() => setRoundMode("strictRotationBestMatch")}
+                disabled={isBusy || gameSession !== null}
+                className={`px-3 py-2 text-center font-medium transition-colors disabled:opacity-50 ${
+                  roundMode === "strictRotationBestMatch" ? "bg-cyan-600 text-white" : "bg-zinc-800 text-zinc-400"
+                }`}
+              >
                 Strict rotation + Best rating match
-              </label>
+              </button>
             </div>
 
             <p className="mt-4 text-sm text-zinc-400">{VERSUS_MODE_EXPLAINERS[versusMode]}</p>
-            <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
-              <label className="rounded-lg border border-zinc-700 px-3 py-2">
-                <input
-                  type="radio"
-                  checked={versusMode === "doubles"}
-                  onChange={() => changeVersusMode("doubles")}
-                  disabled={isBusy || gameSession !== null}
-                  className="mr-2"
-                />
+            <div className="mt-3 grid grid-cols-2 divide-x divide-zinc-700 overflow-hidden rounded-lg border border-zinc-700 text-sm">
+              <button
+                type="button"
+                onClick={() => changeVersusMode("doubles")}
+                disabled={isBusy || gameSession !== null}
+                className={`px-4 py-2 text-center font-medium transition-colors disabled:opacity-50 ${
+                  versusMode === "doubles" ? "bg-cyan-600 text-white" : "bg-zinc-800 text-zinc-400"
+                }`}
+              >
                 Doubles
-              </label>
-              <label className="rounded-lg border border-zinc-700 px-3 py-2">
-                <input
-                  type="radio"
-                  checked={versusMode === "singles"}
-                  onChange={() => changeVersusMode("singles")}
-                  disabled={isBusy || gameSession !== null}
-                  className="mr-2"
-                />
+              </button>
+              <button
+                type="button"
+                onClick={() => changeVersusMode("singles")}
+                disabled={isBusy || gameSession !== null}
+                className={`px-4 py-2 text-center font-medium transition-colors disabled:opacity-50 ${
+                  versusMode === "singles" ? "bg-cyan-600 text-white" : "bg-zinc-800 text-zinc-400"
+                }`}
+              >
                 Singles
-              </label>
-              <label className="flex items-center gap-2 rounded-lg border border-zinc-700 px-3 py-2">
-                Courts
-                <input
-                  type="number"
-                  min={1}
-                  value={courtsAvailable}
-                  onChange={(event) => changeCourtsAvailable(Math.max(1, Number(event.target.value) || 1))}
-                  disabled={isBusy || gameSession !== null}
-                  className="w-16 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm disabled:opacity-50"
-                />
-              </label>
+              </button>
+            </div>
+
+            <div className="mt-8 mb-4 flex w-full items-center gap-3 text-sm">
+              <span className="shrink-0 text-zinc-400">Courts</span>
+              <input
+                type="range"
+                min={1}
+                max={10}
+                step={1}
+                value={courtsAvailable}
+                onChange={(event) => changeCourtsAvailable(Number(event.target.value))}
+                disabled={isBusy || gameSession !== null}
+                className="h-2 flex-1 cursor-pointer rounded-full accent-cyan-500 disabled:cursor-not-allowed disabled:opacity-50 [&::-moz-range-thumb]:h-6 [&::-moz-range-thumb]:w-6 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-zinc-950 [&::-moz-range-thumb]:bg-cyan-400 [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-zinc-950 [&::-webkit-slider-thumb]:bg-cyan-400 [&::-webkit-slider-thumb]:shadow-md"
+              />
+              <span className="w-4 shrink-0 text-right font-semibold text-cyan-400 tabular-nums">{courtsAvailable}</span>
             </div>
 
             <button
