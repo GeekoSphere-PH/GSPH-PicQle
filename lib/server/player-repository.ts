@@ -1,7 +1,7 @@
 import 'server-only';
 
 import type { MatchRow, PlayerRow } from '@/lib/supabase/types';
-import type { MatchResult, PlayerRating } from '@/lib/rating-types';
+import type { MatchResult, MatchStats, PlayerRating } from '@/lib/rating-types';
 import { getSupabaseAdminClient } from '@/lib/server/supabase-admin';
 
 // Maps between the app's single string PlayerRating.id (used everywhere:
@@ -58,6 +58,32 @@ export async function upsertPlayer(player: PlayerRating): Promise<void> {
 
 export async function upsertPlayers(players: PlayerRating[]): Promise<void> {
   await Promise.all(players.map((player) => upsertPlayer(player)));
+}
+
+// Aggregates the write-only `matches` table into per-player win/loss counts.
+// Nothing else reads this table back today, so there's no incremental
+// counter to reuse — a full scan is simplest at this table's demo scale.
+export async function loadMatchStats(): Promise<Record<string, MatchStats>> {
+  const supabase = getSupabaseAdminClient();
+  const { data, error } = await supabase.from('matches').select('team_a, team_b, winner');
+
+  if (error) {
+    throw new Error(`Failed to load match stats: ${error.message}`);
+  }
+
+  const stats: Record<string, MatchStats> = {};
+  const bump = (id: string, won: boolean) => {
+    const entry = stats[id] ?? (stats[id] = { wins: 0, matchesPlayed: 0 });
+    entry.matchesPlayed += 1;
+    if (won) entry.wins += 1;
+  };
+
+  for (const row of data ?? []) {
+    for (const id of row.team_a) bump(id, row.winner === 'A');
+    for (const id of row.team_b) bump(id, row.winner === 'B');
+  }
+
+  return stats;
 }
 
 export async function recordMatch(match: MatchResult): Promise<void> {

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { mapToRecord, recordToMap } from "@/lib/map-utils";
-import type { GameSession, LeaderboardEntry, PlayerRating, RoundBuildResult, RoundMode, VersusMode } from "@/lib/rating-types";
+import type { GameSession, LeaderboardEntry, MatchStats, PlayerRating, RoundBuildResult, RoundMode, VersusMode } from "@/lib/rating-types";
 
 const ROUND_MODE_EXPLAINERS: Record<RoundMode, string> = {
   rotation: "Whoever has waited the most rounds gets a guaranteed spot, even if that makes the match less balanced.",
@@ -19,6 +19,12 @@ const VERSUS_MODE_EXPLAINERS: Record<VersusMode, string> = {
 
 function matchSizeFor(versusMode: VersusMode): number {
   return versusMode === "singles" ? 2 : 4;
+}
+
+function formatWaitDuration(ms: number): string {
+  if (ms < 60_000) return "<1 min";
+  const minutes = Math.round(ms / 60_000);
+  return `~${minutes} min${minutes === 1 ? "" : "s"}`;
 }
 
 // A court's current match. Locked (no editing/swapping) once built — the
@@ -77,6 +83,12 @@ export default function Home() {
   const [players, setPlayers] = useState<Map<string, PlayerRating>>(() => new Map());
   const [activePool, setActivePool] = useState<string[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [matchStats, setMatchStats] = useState<Record<string, MatchStats>>({});
+  // Client-only "when did this player join the queue" timestamps, keyed by
+  // player id. Not persisted — mirrors activePool, which also isn't
+  // restored on page load, so both reset together on refresh.
+  const [queuedAt, setQueuedAt] = useState<Record<string, number>>({});
+  const [now, setNow] = useState(() => Date.now());
   const [newPlayerId, setNewPlayerId] = useState("");
   // Fixed-position court slots — index is the court's on-screen position,
   // which never shifts. `null` means idle/waiting; confirming a match nulls
@@ -103,10 +115,14 @@ export default function Home() {
     let cancelled = false;
     (async () => {
       try {
-        const { players: playerRecord } = await getJson<{ players: Record<string, PlayerRating> }>("/api/players");
+        const { players: playerRecord, matchStats: loadedMatchStats } = await getJson<{
+          players: Record<string, PlayerRating>;
+          matchStats: Record<string, MatchStats>;
+        }>("/api/players");
         if (cancelled) return;
         const loadedPlayers = recordToMap(playerRecord);
         setPlayers(loadedPlayers);
+        setMatchStats(loadedMatchStats);
 
         const { leaderboard: loadedLeaderboard } = await postJson<{ leaderboard: LeaderboardEntry[] }>(
           "/api/rating/leaderboard",
@@ -135,6 +151,13 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Ticks `now` periodically so the live "waiting Xm" / avg queue wait
+  // displays advance without needing a user action to re-render.
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(id);
   }, []);
 
   // Accepts one id or a comma-separated batch (e.g. "p1, p2, p3"). Joins are
@@ -166,6 +189,7 @@ export default function Home() {
         setPlayers(currentPlayers);
         setActivePool(currentPool);
         setLeaderboard(data.leaderboard);
+        setQueuedAt((prev) => ({ ...prev, [id]: Date.now() }));
       }
       topUpCourts(currentPool);
     } catch (err) {
@@ -196,6 +220,11 @@ export default function Home() {
       );
       setActivePool(data.activePool);
       setPlayers(recordToMap(data.players));
+      setQueuedAt((prev) => {
+        const next = { ...prev };
+        delete next[playerId];
+        return next;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to leave queue.");
     } finally {
@@ -254,6 +283,14 @@ export default function Home() {
       // the next rotation per the reference spec.
       setActivePool(data.leftover);
       setRoundsWaited(data.roundsWaited);
+      const matchedIds = poolToUse.filter((id) => !data.leftover.includes(id));
+      if (matchedIds.length > 0) {
+        setQueuedAt((prev) => {
+          const next = { ...prev };
+          for (const id of matchedIds) delete next[id];
+          return next;
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to build round.");
     } finally {
@@ -350,6 +387,7 @@ export default function Home() {
       await postJson("/api/game-session/stop", { sessionId: gameSession.id });
       setGameSession(null);
       setActivePool([]);
+      setQueuedAt({});
       // Drop idle placeholders — nothing will auto-fill them until Start
       // again. In-progress matches are left as-is; they can still be
       // selected and confirmed.
@@ -371,17 +409,31 @@ export default function Home() {
     setIsBusy(true);
     setError(null);
     try {
-      const data = await postJson<{ players: Record<string, PlayerRating>; leaderboard: LeaderboardEntry[] }>(
+      const data = await postJson<{
+        players: Record<string, PlayerRating>;
+        leaderboard: LeaderboardEntry[];
+        matchStats: Record<string, MatchStats>;
+      }>(
         "/api/rating/match",
         { matchResult: { teamA: match.teamA, teamB: match.teamB, winner: match.selectedWinner }, players: mapToRecord(players) },
       );
       setPlayers(recordToMap(data.players));
       setLeaderboard(data.leaderboard);
+      setMatchStats(data.matchStats);
 
-      // Players return to the queue once their match is done.
+      // Players return to the queue once their match is done, with a fresh
+      // wait-time clock (not the timestamp from before they were matched).
       const returning = [...match.teamA, ...match.teamB].filter((id) => !activePool.includes(id));
       const newPool = [...activePool, ...returning];
       setActivePool(newPool);
+      if (returning.length > 0) {
+        const rejoinedAt = Date.now();
+        setQueuedAt((prev) => {
+          const next = { ...prev };
+          for (const id of returning) next[id] = rejoinedAt;
+          return next;
+        });
+      }
 
       // Free this match's slot in place — it keeps its board position; only
       // the content changes once the next match fills back into it. If no
@@ -425,6 +477,8 @@ export default function Home() {
       setPlayers(new Map());
       setActivePool([]);
       setLeaderboard([]);
+      setMatchStats({});
+      setQueuedAt({});
       setCourtSlots(Array<null>(courtsAvailable).fill(null));
       setRoundsWaited({});
       setGameSession(null);
@@ -435,8 +489,28 @@ export default function Home() {
     }
   };
 
+  // Leaderboard bar baseline: normalized against the current pool's actual
+  // min/max conservative rating, rather than a fixed absolute scale — so the
+  // bar reflects real standing within this pool instead of everyone landing
+  // near the same width regardless of how far apart they actually are.
+  const conservativeRatings = leaderboard.map((player) => player.conservativeRating);
+  const minRating = conservativeRatings.length > 0 ? Math.min(...conservativeRatings) : 0;
+  const maxRating = conservativeRatings.length > 0 ? Math.max(...conservativeRatings) : 0;
+  const ratingRange = maxRating - minRating;
+
+  // Live snapshot: average of how long currently-queued players have been
+  // waiting right now (not a historical rolling average).
+  const currentWaits = activePool
+    .map((id) => queuedAt[id])
+    .filter((timestamp): timestamp is number => timestamp != null)
+    .map((timestamp) => now - timestamp);
+  const avgQueueWaitLabel =
+    currentWaits.length > 0
+      ? formatWaitDuration(currentWaits.reduce((sum, wait) => sum + wait, 0) / currentWaits.length)
+      : "—";
+
   return (
-    <main className="min-h-screen bg-zinc-950 p-6 pb-14 text-zinc-100">
+    <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-xl">
           <div className="flex items-start justify-between gap-4">
@@ -521,6 +595,7 @@ export default function Home() {
                         <p className="text-xs text-zinc-500">
                           Games: {player.gamesPlayed}
                           {inPool && roundsWaited[player.id] ? ` • waiting ${roundsWaited[player.id]} round${roundsWaited[player.id] === 1 ? "" : "s"}` : ""}
+                          {inPool && queuedAt[player.id] ? ` • ${formatWaitDuration(now - queuedAt[player.id])}` : ""}
                         </p>
                       </div>
                       <span className={`rounded-full px-2 py-1 text-xs ${inPool ? "bg-emerald-600/20 text-emerald-400" : "bg-zinc-800 text-zinc-300"}`}>
@@ -550,25 +625,47 @@ export default function Home() {
           </div>
 
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-            <h2 className="text-xl font-semibold">Leaderboard</h2>
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="text-xl font-semibold">Leaderboard</h2>
+              <p className="text-xs text-zinc-500">Avg queue wait: {avgQueueWaitLabel}</p>
+            </div>
             <div className="mt-4 space-y-3">
-              {leaderboard.map((player) => (
-                <div key={player.id} className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
-                  <div className="flex items-center justify-between">
-                    <span>{player.id}</span>
-                    <span className="font-semibold text-cyan-400">{Math.round(player.conservativeRating)}</span>
+              {leaderboard.map((player) => {
+                const stats = matchStats[player.id];
+                const winRateLabel =
+                  stats && stats.matchesPlayed > 0 ? `${Math.round((stats.wins / stats.matchesPlayed) * 100)}%` : "—";
+                const widthPct =
+                  ratingRange === 0 ? 100 : ((player.conservativeRating - minRating) / ratingRange) * 100;
+                return (
+                  <div key={player.id} className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                    <div className="flex items-center justify-between">
+                      <span>{player.id}</span>
+                      <span className="font-semibold text-cyan-400">{Math.round(player.conservativeRating)}</span>
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-zinc-800">
+                      <div
+                        className="h-2 rounded-full bg-cyan-500"
+                        style={{ width: `${Math.max(4, Math.min(100, widthPct))}%` }}
+                      />
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400">
+                      <span>Win rate: {winRateLabel}</span>
+                      <span>Games played: {player.gamesPlayed}</span>
+                      <span className="group relative inline-flex">
+                        <span
+                          tabIndex={0}
+                          className="flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-zinc-600 text-[10px] font-semibold leading-none text-zinc-400 outline-none hover:border-cyan-500 hover:text-cyan-300 focus:border-cyan-500 focus:text-cyan-300"
+                        >
+                          i
+                        </span>
+                        <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-cyan-900/60 bg-cyan-950/95 px-2.5 py-1.5 text-[11px] text-zinc-200 opacity-0 shadow-xl transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                          mu {Math.round(player.mu)} • sigma {Math.round(player.sigma)}
+                        </span>
+                      </span>
+                    </div>
                   </div>
-                  <div className="mt-2 h-2 rounded-full bg-zinc-800">
-                    <div
-                      className="h-2 rounded-full bg-cyan-500"
-                      style={{ width: `${Math.min(100, Math.max(0, player.conservativeRating / 20))}%` }}
-                    />
-                  </div>
-                  <p className="mt-2 text-xs text-zinc-400">
-                    mu {Math.round(player.mu)} • sigma {Math.round(player.sigma)} • games {player.gamesPlayed}
-                  </p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </section>
@@ -743,7 +840,7 @@ export default function Home() {
         </section>
       </div>
 
-      <div className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-center bg-[#F44336] px-4 py-2 text-sm font-semibold text-white shadow-[0_-2px_8px_rgba(0,0,0,0.3)]">
+      <div className="fixed bottom-4 right-4 z-50 flex items-center rounded-full bg-[#F44336] px-3 py-1.5 text-xs font-semibold text-white shadow-[0_2px_8px_rgba(0,0,0,0.4)]">
         Live commit: <span className="ml-1.5 font-mono">{COMMIT_SHA_SHORT}</span>
       </div>
     </main>
