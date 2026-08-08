@@ -1,3 +1,5 @@
+import type { BoardState } from '@/lib/rating-types';
+
 export type PlayerRow = {
   id: string;
   name: string;
@@ -17,6 +19,7 @@ export type MatchRow = {
   team_a: string[];
   team_b: string[];
   winner: 'A' | 'B';
+  session_id: string | null;
   created_at: string;
 };
 
@@ -27,5 +30,8 @@ export type GameSessionRow = {
   courts_available: number;
   started_at: string;
   ended_at: string | null;
+  // The live queue/court board, synced on every change while the session is
+  // active. Null until the first sync after Start.
+  board_state: BoardState | null;
   created_at: string;
 };

@@ -46,9 +46,31 @@ export type RoundMode = "rating" | "rotation" | "strictRotationBestMatch";
 // pickleballq-rating-service/app/models.py -- no shared codegen exists.
 export type VersusMode = "singles" | "doubles";
 
+// A court's current match. `id` is client-only (the API's MatchResult has
+// none) but round-trips through BoardState so a restored board keeps
+// stable per-court identity.
+export type CourtMatch = {
+  id: string;
+  teamA: string[];
+  teamB: string[];
+  selectedWinner?: "A" | "B";
+};
+
+// The live queue/court board for an active session: who's queued, what's on
+// each court, and rotation/wait bookkeeping. Persisted on game_sessions so a
+// page refresh (or a second device) restores exactly where things stood,
+// not just the locked-in round/versus/courts settings.
+export type BoardState = {
+  activePool: string[];
+  courtSlots: (CourtMatch | null)[];
+  roundsWaited: Record<string, number>;
+  queuedAt: Record<string, number>;
+};
+
 // A "game profile setting" session: Start locks in roundMode/versusMode/
 // courtsAvailable and records startedAt; Stop records endedAt and unlocks
-// them again. endedAt is null while the session is active.
+// them again. endedAt is null while the session is active. boardState is
+// null until the first board sync after Start.
 export type GameSession = {
   id: string;
   roundMode: RoundMode;
@@ -56,4 +78,5 @@ export type GameSession = {
   courtsAvailable: number;
   startedAt: string;
   endedAt: string | null;
+  boardState: BoardState | null;
 };

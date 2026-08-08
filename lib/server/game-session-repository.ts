@@ -1,13 +1,16 @@
 import 'server-only';
 
 import type { GameSessionRow } from '@/lib/supabase/types';
-import type { GameSession, RoundMode, VersusMode } from '@/lib/rating-types';
+import type { BoardState, GameSession, RoundMode, VersusMode } from '@/lib/rating-types';
 import { getSupabaseAdminClient } from '@/lib/server/supabase-admin';
 
-const SESSION_COLUMNS = 'id, round_mode, versus_mode, courts_available, started_at, ended_at';
+const SESSION_COLUMNS = 'id, round_mode, versus_mode, courts_available, started_at, ended_at, board_state';
 
 function rowToSession(
-  row: Pick<GameSessionRow, 'id' | 'round_mode' | 'versus_mode' | 'courts_available' | 'started_at' | 'ended_at'>,
+  row: Pick<
+    GameSessionRow,
+    'id' | 'round_mode' | 'versus_mode' | 'courts_available' | 'started_at' | 'ended_at' | 'board_state'
+  >,
 ): GameSession {
   return {
     id: row.id,
@@ -16,6 +19,7 @@ function rowToSession(
     courtsAvailable: row.courts_available,
     startedAt: row.started_at,
     endedAt: row.ended_at,
+    boardState: row.board_state,
   };
 }
 
@@ -77,6 +81,40 @@ export async function stopGameSession(id: string): Promise<GameSession> {
   }
 
   return rowToSession(data);
+}
+
+// Syncs the live queue/court board for the active session, so a page
+// refresh (or a second device) restores it instead of just the locked-in
+// settings. Silently a no-op if `id` isn't the currently active session
+// (e.g. a stale client sync landing after Stop) — nothing to restore for an
+// ended session anyway.
+export async function updateGameSessionBoardState(id: string, boardState: BoardState): Promise<void> {
+  const supabase = getSupabaseAdminClient();
+  const { error } = await supabase
+    .from('game_sessions')
+    .update({ board_state: boardState })
+    .eq('id', id)
+    .is('ended_at', null);
+
+  if (error) {
+    throw new Error(`Failed to sync game session board state: ${error.message}`);
+  }
+}
+
+// Ended sessions, most recent first — the history page's session list.
+export async function listPastGameSessions(): Promise<GameSession[]> {
+  const supabase = getSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from('game_sessions')
+    .select(SESSION_COLUMNS)
+    .not('ended_at', 'is', null)
+    .order('started_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to load past game sessions: ${error.message}`);
+  }
+
+  return (data ?? []).map(rowToSession);
 }
 
 // Wipes every session row. Mirrors player-repository.ts's deleteAllData,

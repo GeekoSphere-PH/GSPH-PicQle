@@ -86,17 +86,35 @@ export async function loadMatchStats(): Promise<Record<string, MatchStats>> {
   return stats;
 }
 
-export async function recordMatch(match: MatchResult): Promise<void> {
+export async function recordMatch(match: MatchResult, sessionId: string | null): Promise<void> {
   const supabase = getSupabaseAdminClient();
   const { error } = await supabase.from('matches').insert({
     team_a: match.teamA,
     team_b: match.teamB,
     winner: match.winner,
-  } satisfies Pick<MatchRow, 'team_a' | 'team_b' | 'winner'>);
+    session_id: sessionId,
+  } satisfies Pick<MatchRow, 'team_a' | 'team_b' | 'winner' | 'session_id'>);
 
   if (error) {
     throw new Error(`Failed to record match: ${error.message}`);
   }
+}
+
+export type SessionMatch = Pick<MatchRow, 'id' | 'team_a' | 'team_b' | 'winner' | 'created_at'>;
+
+export async function listMatchesForSession(sessionId: string): Promise<SessionMatch[]> {
+  const supabase = getSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from('matches')
+    .select('id, team_a, team_b, winner, created_at')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to load matches for session "${sessionId}": ${error.message}`);
+  }
+
+  return data ?? [];
 }
 
 // Wipes every player and match row. Mirrors supabase/reset_data.sql, exposed

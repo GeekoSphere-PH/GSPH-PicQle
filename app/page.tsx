@@ -1,9 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 
 import { mapToRecord, recordToMap } from "@/lib/map-utils";
-import type { GameSession, LeaderboardEntry, MatchStats, PlayerRating, RoundBuildResult, RoundMode, VersusMode } from "@/lib/rating-types";
+import type {
+  BoardState,
+  CourtMatch,
+  GameSession,
+  LeaderboardEntry,
+  MatchStats,
+  PlayerRating,
+  RoundBuildResult,
+  RoundMode,
+  VersusMode,
+} from "@/lib/rating-types";
 
 const ROUND_MODE_EXPLAINERS: Record<RoundMode, string> = {
   rotation: "Whoever has waited the most rounds gets a guaranteed spot, even if that makes the match less balanced.",
@@ -27,16 +38,20 @@ function formatWaitDuration(ms: number): string {
   return `~${minutes} min${minutes === 1 ? "" : "s"}`;
 }
 
+// Medal styling for the top 3 leaderboard cards, keyed by rank index (0 =
+// 1st place). Everyone else gets the default zinc card.
+const LEADERBOARD_RANK_STYLES = [
+  { card: "border-yellow-500 bg-gradient-to-br from-yellow-500/20 via-yellow-600/10 to-zinc-950/70", name: "text-yellow-300" },
+  { card: "border-slate-300 bg-gradient-to-br from-slate-300/20 via-slate-400/10 to-zinc-950/70", name: "text-slate-200" },
+  { card: "border-amber-700 bg-gradient-to-br from-amber-600/20 via-amber-800/10 to-zinc-950/70", name: "text-amber-500" },
+];
+const DEFAULT_LEADERBOARD_STYLE = { card: "border-zinc-800 bg-zinc-950/70", name: "text-zinc-100" };
+
 // A court's current match. Locked (no editing/swapping) once built — the
 // only action available is selecting then confirming a winner, which frees
-// the court and pulls in the next match. `id` is client-only (the API's
-// MatchResult has none, and this state never round-trips to the server).
-type ActiveMatch = {
-  id: string;
-  teamA: string[];
-  teamB: string[];
-  selectedWinner?: "A" | "B";
-};
+// the court and pulls in the next match. CourtMatch (lib/rating-types.ts)
+// is shared with BoardState, which is what actually persists this.
+type ActiveMatch = CourtMatch;
 
 const COMMIT_SHA = process.env.NEXT_PUBLIC_COMMIT_SHA ?? "unknown";
 const COMMIT_SHA_SHORT = COMMIT_SHA === "unknown" ? "unknown" : COMMIT_SHA.slice(0, 7);
@@ -79,14 +94,36 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function patchJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    let message = `Request to ${path} failed (${response.status}).`;
+    try {
+      const data = await response.json();
+      if (data?.error) message = data.error;
+    } catch {
+      // ignore parse failure, keep the default message
+    }
+    throw new Error(message);
+  }
+
+  return response.json() as Promise<T>;
+}
+
 export default function Home() {
   const [players, setPlayers] = useState<Map<string, PlayerRating>>(() => new Map());
   const [activePool, setActivePool] = useState<string[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [matchStats, setMatchStats] = useState<Record<string, MatchStats>>({});
-  // Client-only "when did this player join the queue" timestamps, keyed by
-  // player id. Not persisted — mirrors activePool, which also isn't
-  // restored on page load, so both reset together on refresh.
+  // "When did this player join the queue" timestamps, keyed by player id.
+  // Part of BoardState — synced to game_sessions.board_state alongside
+  // activePool/courtSlots/roundsWaited (see the sync effect below) so a
+  // refresh mid-session restores it instead of resetting to empty.
   const [queuedAt, setQueuedAt] = useState<Record<string, number>>({});
   const [now, setNow] = useState(() => Date.now());
   const [newPlayerId, setNewPlayerId] = useState("");
@@ -106,6 +143,12 @@ export default function Home() {
   const [gameSession, setGameSession] = useState<GameSession | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showMuSigmaInfo, setShowMuSigmaInfo] = useState(false);
+  // Guards the board-sync effect below from firing before the mount
+  // restore (fetch of /api/game-session) has had a chance to run — without
+  // this, a session found already-active would sync its own just-restored
+  // board right back, which is harmless but wasteful.
+  const hasHydratedBoardRef = useRef(false);
 
   // PlayerRating is persistent (Supabase); the leaderboard and all rating
   // math live entirely in the external microservice. On mount, load the
@@ -132,26 +175,51 @@ export default function Home() {
 
         // If a game is already Started (e.g. another tab, or this page was
         // refreshed mid-session), restore the lock and the settings it
-        // locked in instead of showing the defaults.
+        // locked in instead of showing the defaults — and restore the live
+        // board (queue/courts/wait bookkeeping) from board_state, since
+        // none of that lives anywhere else once the page reloads.
         const { session } = await getJson<{ session: GameSession | null }>("/api/game-session");
-        if (cancelled || !session) return;
-        setGameSession(session);
-        setRoundMode(session.roundMode);
-        setVersusMode(session.versusMode);
-        setCourtsAvailable(session.courtsAvailable);
-        setCourtSlots((current) =>
-          current.length < session.courtsAvailable
-            ? [...current, ...Array<null>(session.courtsAvailable - current.length).fill(null)]
-            : current,
-        );
+        if (cancelled) return;
+        if (session) {
+          setGameSession(session);
+          setRoundMode(session.roundMode);
+          setVersusMode(session.versusMode);
+          setCourtsAvailable(session.courtsAvailable);
+          const board = session.boardState;
+          setCourtSlots((current) => {
+            const restored = board?.courtSlots ?? current;
+            return restored.length < session.courtsAvailable
+              ? [...restored, ...Array<null>(session.courtsAvailable - restored.length).fill(null)]
+              : restored;
+          });
+          setActivePool(board?.activePool ?? []);
+          setRoundsWaited(board?.roundsWaited ?? {});
+          setQueuedAt(board?.queuedAt ?? {});
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load players.");
+      } finally {
+        if (!cancelled) hasHydratedBoardRef.current = true;
       }
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Mirrors the live queue/court board to the server on every change while
+  // a session is active, so a refresh (or a second device) restores exactly
+  // where things stood instead of just the locked-in settings (see the
+  // mount effect above, which reads it back). Best-effort: a failed sync
+  // here doesn't block whatever the user just did, it just risks losing
+  // the board on a refresh before the next successful sync.
+  useEffect(() => {
+    if (!hasHydratedBoardRef.current || !gameSession) return;
+    const boardState: BoardState = { activePool, courtSlots, roundsWaited, queuedAt };
+    patchJson("/api/game-session", { sessionId: gameSession.id, boardState }).catch((err) => {
+      console.error("Failed to sync board state:", err);
+    });
+  }, [gameSession, activePool, courtSlots, roundsWaited, queuedAt]);
 
   // Ticks `now` periodically so the live "waiting Xm" / avg queue wait
   // displays advance without needing a user action to re-render.
@@ -388,10 +456,11 @@ export default function Home() {
       setGameSession(null);
       setActivePool([]);
       setQueuedAt({});
-      // Drop idle placeholders — nothing will auto-fill them until Start
-      // again. In-progress matches are left as-is; they can still be
-      // selected and confirmed.
-      setCourtSlots((current) => current.filter((slot) => slot !== null));
+      setRoundsWaited({});
+      // Stop clears the whole status board, including any still-in-progress
+      // matches — their results are discarded (never confirmed, so nothing
+      // was persisted for them) rather than left playable after Stop.
+      setCourtSlots([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to stop game.");
     } finally {
@@ -415,7 +484,11 @@ export default function Home() {
         matchStats: Record<string, MatchStats>;
       }>(
         "/api/rating/match",
-        { matchResult: { teamA: match.teamA, teamB: match.teamB, winner: match.selectedWinner }, players: mapToRecord(players) },
+        {
+          matchResult: { teamA: match.teamA, teamB: match.teamB, winner: match.selectedWinner },
+          players: mapToRecord(players),
+          sessionId: gameSession?.id ?? null,
+        },
       );
       setPlayers(recordToMap(data.players));
       setLeaderboard(data.leaderboard);
@@ -489,15 +562,6 @@ export default function Home() {
     }
   };
 
-  // Leaderboard bar baseline: normalized against the current pool's actual
-  // min/max conservative rating, rather than a fixed absolute scale — so the
-  // bar reflects real standing within this pool instead of everyone landing
-  // near the same width regardless of how far apart they actually are.
-  const conservativeRatings = leaderboard.map((player) => player.conservativeRating);
-  const minRating = conservativeRatings.length > 0 ? Math.min(...conservativeRatings) : 0;
-  const maxRating = conservativeRatings.length > 0 ? Math.max(...conservativeRatings) : 0;
-  const ratingRange = maxRating - minRating;
-
   // Live snapshot: average of how long currently-queued players have been
   // waiting right now (not a historical rolling average).
   const currentWaits = activePool
@@ -520,13 +584,58 @@ export default function Home() {
                 This minimal interface lets you test the queue model, build rounds from the live pool, and apply match outcomes to the Glicko-2 rating engine. All rating computation runs in a separate microservice — this page only sends and receives state.
               </p>
             </div>
-            <button
-              onClick={resetAllData}
-              disabled={isBusy}
-              className="shrink-0 rounded-lg border border-red-800 bg-red-950/40 px-3 py-2 text-sm font-medium text-red-300 hover:bg-red-950/70 disabled:opacity-50"
-            >
-              Reset all data
-            </button>
+            <div className="flex shrink-0 gap-2">
+              <Link
+                href="/history"
+                className="rounded-lg border border-zinc-700 px-3 py-2 text-sm font-medium hover:bg-zinc-800"
+              >
+                History
+              </Link>
+              <button
+                onClick={() => setShowMuSigmaInfo(true)}
+                aria-label="What do mu and sigma mean?"
+                title="What do mu and sigma mean?"
+                className="rounded-lg border border-cyan-800 bg-cyan-950/20 p-2 text-cyan-300 hover:bg-cyan-950/50"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-5 w-5"
+                >
+                  <path d="M12 7c-1.5-1.3-3.6-2-6.5-2C4.4 5 3.5 5.2 3 5.3v13.4c.5-.1 1.4-.3 2.5-.3 2.9 0 5 .7 6.5 2" />
+                  <path d="M12 7c1.5-1.3 3.6-2 6.5-2 1.1 0 2 .2 2.5.3v13.4c-.5-.1-1.4-.3-2.5-.3-2.9 0-5 .7-6.5 2V7Z" />
+                </svg>
+              </button>
+              <button
+                onClick={resetAllData}
+                disabled={isBusy}
+                aria-label="Reset all data"
+                title="Reset all data"
+                className="rounded-lg border border-red-800 bg-red-950/40 p-2 text-red-300 hover:bg-red-950/70 disabled:opacity-50"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-5 w-5"
+                >
+                  <path d="M3 6h18" />
+                  <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                  <path d="M10 11v6" />
+                  <path d="M14 11v6" />
+                </svg>
+              </button>
+            </div>
           </div>
           <p className="mt-2 text-xs text-red-400/80">
             Single-instance warning: this database is shared. Resetting clears every player and match for all connected users, with no undo.
@@ -535,29 +644,51 @@ export default function Home() {
             <p className="mt-4 rounded-lg border border-red-800 bg-red-950/50 px-3 py-2 text-sm text-red-300">{error}</p>
           ) : null}
 
-          <div className="mt-4 rounded-xl border border-cyan-900/60 bg-cyan-950/20 p-4 text-sm text-zinc-300">
-            <p className="font-medium text-cyan-300">What do &quot;mu&quot; and &quot;sigma&quot; mean?</p>
-            <ul className="mt-2 space-y-1.5">
-              <li>
-                <span className="font-medium text-zinc-100">mu (μ)</span> — the player&apos;s skill estimate, on the same
-                scale as a normal rating (everyone starts at 1500). Win matches and it goes up; lose and it goes down.
-                Higher mu = the system thinks you&apos;re better.
-              </li>
-              <li>
-                <span className="font-medium text-zinc-100">sigma (σ)</span> — how confident the system is in that mu.
-                It starts high for a brand-new player (we&apos;re guessing) and shrinks as they play more games (we&apos;re
-                sure). It also creeps back up if someone stops playing for a while, since their true skill may have
-                drifted.
-              </li>
-              <li>
-                <span className="font-medium text-zinc-100">Leaderboard rank</span> — uses{" "}
-                <span className="font-mono text-cyan-300">mu − 2×sigma</span> (a &quot;conservative rating&quot;), not raw
-                mu. This stops a new player from jumping to #1 after one lucky win — they need a few games to prove
-                the rating before it counts at full value.
-              </li>
-            </ul>
-          </div>
         </section>
+
+        {showMuSigmaInfo ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+            onClick={() => setShowMuSigmaInfo(false)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="What do mu and sigma mean?"
+              onClick={(event) => event.stopPropagation()}
+              className="w-full max-w-lg rounded-xl border border-cyan-900/60 bg-cyan-950/20 p-4 text-sm text-zinc-300 shadow-xl"
+            >
+              <p className="font-medium text-cyan-300">What do &quot;mu&quot; and &quot;sigma&quot; mean?</p>
+              <ul className="mt-2 space-y-1.5">
+                <li>
+                  <span className="font-medium text-zinc-100">mu (μ)</span> — the player&apos;s skill estimate, on the same
+                  scale as a normal rating (everyone starts at 1500). Win matches and it goes up; lose and it goes down.
+                  Higher mu = the system thinks you&apos;re better.
+                </li>
+                <li>
+                  <span className="font-medium text-zinc-100">sigma (σ)</span> — how confident the system is in that mu.
+                  It starts high for a brand-new player (we&apos;re guessing) and shrinks as they play more games (we&apos;re
+                  sure). It also creeps back up if someone stops playing for a while, since their true skill may have
+                  drifted.
+                </li>
+                <li>
+                  <span className="font-medium text-zinc-100">Leaderboard rank</span> — uses{" "}
+                  <span className="font-mono text-cyan-300">mu − 2×sigma</span> (a &quot;conservative rating&quot;), not raw
+                  mu. This stops a new player from jumping to #1 after one lucky win — they need a few games to prove
+                  the rating before it counts at full value.
+                </li>
+              </ul>
+              <div className="mt-4 flex justify-end">
+                <button
+                  onClick={() => setShowMuSigmaInfo(false)}
+                  className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-500"
+                >
+                  Ok
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
@@ -630,23 +761,15 @@ export default function Home() {
               <p className="text-xs text-zinc-500">Avg queue wait: {avgQueueWaitLabel}</p>
             </div>
             <div className="mt-4 space-y-3">
-              {leaderboard.map((player) => {
+              {leaderboard.map((player, rank) => {
                 const stats = matchStats[player.id];
                 const winRateLabel =
                   stats && stats.matchesPlayed > 0 ? `${Math.round((stats.wins / stats.matchesPlayed) * 100)}%` : "—";
-                const widthPct =
-                  ratingRange === 0 ? 100 : ((player.conservativeRating - minRating) / ratingRange) * 100;
+                const style = LEADERBOARD_RANK_STYLES[rank] ?? DEFAULT_LEADERBOARD_STYLE;
                 return (
-                  <div key={player.id} className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                  <div key={player.id} className={`font-coda rounded-lg border-2 p-3 ${style.card}`}>
                     <div className="flex items-center justify-between">
-                      <span>{player.id}</span>
-                      <span className="font-semibold text-cyan-400">{Math.round(player.conservativeRating)}</span>
-                    </div>
-                    <div className="mt-2 h-2 rounded-full bg-zinc-800">
-                      <div
-                        className="h-2 rounded-full bg-cyan-500"
-                        style={{ width: `${Math.max(4, Math.min(100, widthPct))}%` }}
-                      />
+                      <span className={`text-xl font-bold ${style.name}`}>{player.id}</span>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400">
                       <span>Win rate: {winRateLabel}</span>
