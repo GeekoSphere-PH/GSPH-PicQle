@@ -76,45 +76,190 @@ function teamWinRatePct(team: string[], matchStats: Record<string, MatchStats>):
 }
 
 // One side of a status-board match card: overlapping avatars, team name(s),
-// and win%. Doubles as the winner-select control — click to select, click
-// again elsewhere to change; Confirm result (below the card) applies it.
+// and win%. The avatar/win% area is the winner-select control — click to
+// select, click again elsewhere to change; Confirm result (below the card)
+// applies it. The name is its own click target (tap to swap a player) — it
+// can't live inside the same <button> as the winner-select area, hence the
+// outer wrapper being a div-as-button rather than a real <button>.
 function TeamMatchBlock({
   team,
   winRatePct,
   isSelected,
   disabled,
   onSelect,
+  onNameClick,
+  inlineSwapOptions,
+  onInlineSwapSelect,
+  onInlineSwapClose,
 }: {
   team: string[];
   winRatePct: number;
   isSelected: boolean;
   disabled: boolean;
   onSelect: () => void;
+  onNameClick: () => void;
+  inlineSwapOptions: { id: string; label: string }[] | null;
+  onInlineSwapSelect: (playerId: string) => void;
+  onInlineSwapClose: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      disabled={disabled}
-      className={`flex flex-1 flex-col items-center gap-2 rounded-xl p-3 text-center transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-        isSelected ? "bg-cyan-950/50 ring-2 ring-cyan-500" : "hover:bg-zinc-800/60"
-      }`}
+    <div
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      aria-pressed={isSelected}
+      aria-disabled={disabled}
+      onClick={disabled ? undefined : onSelect}
+      onKeyDown={(event) => {
+        if (disabled) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      className={`flex flex-1 flex-col items-center gap-2 rounded-xl p-3 text-center transition-colors ${
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+      } ${isSelected ? "bg-cyan-950/50 ring-2 ring-cyan-500" : "hover:bg-zinc-800/60"}`}
     >
       <div className="flex -space-x-3">
         {team.map((id) => (
           <img key={id} src={avatarUrl(id)} alt="" className="h-10 w-10 rounded-full border-2 border-zinc-900 bg-zinc-800" />
         ))}
       </div>
-      <p className="text-sm font-semibold text-white">{team.join(" & ")}</p>
+      {inlineSwapOptions ? (
+        <select
+          autoFocus
+          disabled={disabled}
+          defaultValue={team[0]}
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onBlur={onInlineSwapClose}
+          onChange={(event) => onInlineSwapSelect(event.target.value)}
+          className="rounded-lg border border-zinc-600 bg-zinc-900 px-2 py-1 text-sm font-semibold text-white"
+        >
+          {inlineSwapOptions.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={(event) => {
+            event.stopPropagation();
+            onNameClick();
+          }}
+          className="text-sm font-semibold text-white underline decoration-dotted underline-offset-4 hover:text-cyan-300 disabled:cursor-not-allowed disabled:no-underline disabled:hover:text-white"
+        >
+          {team.join(" & ")}
+        </button>
+      )}
       <p className="text-xs font-bold text-orange-400">{Math.round(winRatePct)}% Win</p>
-    </button>
+    </div>
   );
 }
 
-// A court's current match. Locked (no editing/swapping) once built — the
-// only action available is selecting then confirming a winner, which frees
-// the court and pulls in the next match. CourtMatch (lib/rating-types.ts)
-// is shared with BoardState, which is what actually persists this.
+type SwapCandidate = { id: string; label: string };
+
+// Doubles' swap UI: a modal with one dropdown per current teammate, seeded
+// from `team` and only committed to the caller on Confirm — cancelling (or
+// clicking the backdrop) just unmounts this, discarding `pending` for free.
+// Defined at module scope (not inside Home()) so it isn't recreated, and
+// therefore remounted, on every Home() render.
+function TeamSwapModal({
+  team,
+  candidates,
+  disabled,
+  onCancel,
+  onConfirm,
+}: {
+  team: string[];
+  candidates: SwapCandidate[];
+  disabled: boolean;
+  onCancel: () => void;
+  onConfirm: (newTeam: string[]) => void;
+}) {
+  const [pending, setPending] = useState<string[]>(team);
+
+  // Each slot's options are the shared candidate pool (already excludes
+  // everyone else on any court) plus its own current occupant, minus
+  // whatever the *other* slot currently has pending — so the two selects
+  // can't end up picking the same replacement.
+  const optionsFor = (slotIndex: number): SwapCandidate[] => {
+    const otherPending = pending[1 - slotIndex];
+    const current = team[slotIndex];
+    const options = candidates.filter((candidate) => candidate.id !== otherPending);
+    if (!options.some((candidate) => candidate.id === current)) {
+      options.unshift({ id: current, label: `${current} (on court)` });
+    }
+    return options;
+  };
+
+  const unchanged = pending.every((id, index) => id === team[index]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onCancel}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Swap players"
+        onClick={(event) => event.stopPropagation()}
+        className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900 p-5"
+      >
+        <p className="text-lg font-semibold text-white">Swap players</p>
+        <p className="mt-1 text-xs text-zinc-400">
+          Pick a replacement for either player. Whoever gets swapped out goes back to the queue.
+        </p>
+        <div className="mt-4 space-y-3">
+          {pending.map((playerId, index) => (
+            <div key={index}>
+              <label className="text-xs text-zinc-500">Player {index + 1}</label>
+              <select
+                value={playerId}
+                disabled={disabled}
+                onChange={(event) => {
+                  const nextId = event.target.value;
+                  setPending((current) => current.map((id, i) => (i === index ? nextId : id)));
+                }}
+                className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white"
+              >
+                {optionsFor(index).map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-zinc-700 px-3 py-2 text-sm font-medium hover:bg-zinc-800"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={disabled || unchanged}
+            onClick={() => onConfirm(pending)}
+            className="rounded-lg bg-cyan-600 px-3 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            Confirm
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// A court's current match. The only actions are selecting then confirming a
+// winner (which frees the court and pulls in the next match), and swapping
+// a player before confirming — see applyTeamSwap. CourtMatch
+// (lib/rating-types.ts) is shared with BoardState, which is what actually
+// persists this.
 type ActiveMatch = CourtMatch;
 
 const COMMIT_SHA = process.env.NEXT_PUBLIC_COMMIT_SHA ?? "unknown";
@@ -208,6 +353,10 @@ export default function Home() {
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showMuSigmaInfo, setShowMuSigmaInfo] = useState(false);
+  // Which court/side currently has its swap UI open. Doubles (team length
+  // 2) opens the TeamSwapModal for it; singles (team length 1) opens the
+  // inline dropdown in TeamMatchBlock instead — same target drives both.
+  const [swapTarget, setSwapTarget] = useState<{ matchId: string; side: "A" | "B" } | null>(null);
   // Guards the board-sync effect below from firing before the mount
   // restore (fetch of /api/game-session) has had a chance to run — without
   // this, a session found already-active would sync its own just-restored
@@ -536,6 +685,54 @@ export default function Home() {
     setCourtSlots((current) => current.map((slot) => (slot?.id === matchId ? { ...slot, selectedWinner: winner } : slot)));
   };
 
+  // Manually swap players on a live court. This only ever touches queue
+  // bookkeeping — confirmMatch rates whatever teams sit in the slot at
+  // Confirm time, so rating computation is entirely unaffected by how the
+  // lineup got there. Whoever leaves the court returns to the queue with a
+  // fresh wait clock (exactly what confirmMatch already does for finishing
+  // players); whoever joins leaves the queue and has their waited-rounds
+  // count reset, mirroring what a normal round-build would do for them —
+  // this is a client-side approximation, not the microservice's real
+  // fairness recomputation (no round was built), but keeps a swapped-in
+  // player from being unfairly reprioritized next round on a stale count.
+  const applyTeamSwap = (matchId: string, side: "A" | "B", newTeam: string[]) => {
+    if (isBusy) return;
+
+    const slot = courtSlots.find((candidate) => candidate?.id === matchId);
+    if (!slot) return; // court was confirmed/cleared out from under an open swap UI
+
+    const currentTeam = side === "A" ? slot.teamA : slot.teamB;
+    const outgoing = currentTeam.filter((id) => !newTeam.includes(id));
+    const incoming = newTeam.filter((id) => !currentTeam.includes(id));
+    if (outgoing.length === 0 && incoming.length === 0) return;
+
+    setCourtSlots((current) =>
+      current.map((candidate) => {
+        if (candidate?.id !== matchId) return candidate;
+        // The lineup changed, so any winner already picked for the old
+        // lineup shouldn't silently carry over to the new one.
+        return side === "A"
+          ? { ...candidate, teamA: newTeam, selectedWinner: undefined }
+          : { ...candidate, teamB: newTeam, selectedWinner: undefined };
+      }),
+    );
+    setActivePool((current) => [...current.filter((id) => !incoming.includes(id)), ...outgoing.filter((id) => !current.includes(id))]);
+    const rejoinedAt = Date.now();
+    setQueuedAt((prev) => {
+      const next = { ...prev };
+      for (const id of incoming) delete next[id];
+      for (const id of outgoing) next[id] = rejoinedAt;
+      return next;
+    });
+    if (incoming.length > 0) {
+      setRoundsWaited((prev) => {
+        const next = { ...prev };
+        for (const id of incoming) next[id] = 0;
+        return next;
+      });
+    }
+  };
+
   const confirmMatch = async (match: ActiveMatch) => {
     if (isBusy || !match.selectedWinner) return;
 
@@ -643,6 +840,24 @@ export default function Home() {
   leaderboard.forEach((entry, index) => {
     leaderboardRank[entry.id] = index + 1;
   });
+
+  // Every roster player not currently standing on some court — the pool a
+  // swap can draw from. Covers both queued and fully-idle players ("all the
+  // players"), while preventing double-booking someone onto two courts.
+  const onCourtIds = new Set(courtSlots.flatMap((slot) => (slot ? [...slot.teamA, ...slot.teamB] : [])));
+  const swapCandidates: SwapCandidate[] = [
+    ...activePool.filter((id) => !onCourtIds.has(id)).map((id) => ({ id, label: `${id} (queued)` })),
+    ...Array.from(players.keys())
+      .filter((id) => !onCourtIds.has(id) && !activePool.includes(id))
+      .map((id) => ({ id, label: `${id} (idle)` })),
+  ];
+
+  // The doubles swap modal's target team, resolved from swapTarget. Only
+  // rendered for team length > 1 — length-1 (singles) teams use the inline
+  // dropdown in TeamMatchBlock instead, which commits immediately on select.
+  const swapModalMatch = swapTarget ? (courtSlots.find((slot) => slot?.id === swapTarget.matchId) ?? null) : null;
+  const swapModalTeam =
+    swapModalMatch && swapTarget ? (swapTarget.side === "A" ? swapModalMatch.teamA : swapModalMatch.teamB) : null;
 
   return (
     <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
@@ -756,6 +971,19 @@ export default function Home() {
               </div>
             </div>
           </div>
+        ) : null}
+
+        {swapTarget && swapModalTeam && swapModalTeam.length > 1 ? (
+          <TeamSwapModal
+            team={swapModalTeam}
+            candidates={swapCandidates}
+            disabled={isBusy}
+            onCancel={() => setSwapTarget(null)}
+            onConfirm={(newTeam) => {
+              applyTeamSwap(swapTarget.matchId, swapTarget.side, newTeam);
+              setSwapTarget(null);
+            }}
+          />
         ) : null}
 
         <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
@@ -1017,7 +1245,8 @@ export default function Home() {
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
             <h2 className="text-xl font-semibold">Status board</h2>
             <p className="mt-2 text-sm text-zinc-400">
-              Active matches are locked until you select a winner and confirm — confirming frees the court and pulls in the next match from the queue.
+              Tap a name to swap a player before confirming — whoever&apos;s swapped out goes back to the queue.
+              Select a winner and confirm to free the court and pull in the next match from the queue.
             </p>
             <div className="mt-4 space-y-4">
               {courtSlots.map((match, index) => (
@@ -1034,6 +1263,17 @@ export default function Home() {
                           isSelected={match.selectedWinner === "A"}
                           disabled={isBusy}
                           onSelect={() => selectWinner(match.id, "A")}
+                          onNameClick={() => setSwapTarget({ matchId: match.id, side: "A" })}
+                          inlineSwapOptions={
+                            match.teamA.length === 1 && swapTarget?.matchId === match.id && swapTarget.side === "A"
+                              ? [{ id: match.teamA[0], label: `${match.teamA[0]} (on court)` }, ...swapCandidates]
+                              : null
+                          }
+                          onInlineSwapSelect={(playerId) => {
+                            applyTeamSwap(match.id, "A", [playerId]);
+                            setSwapTarget(null);
+                          }}
+                          onInlineSwapClose={() => setSwapTarget(null)}
                         />
                         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black text-[11px] font-bold text-white">
                           vs
@@ -1044,6 +1284,17 @@ export default function Home() {
                           isSelected={match.selectedWinner === "B"}
                           disabled={isBusy}
                           onSelect={() => selectWinner(match.id, "B")}
+                          onNameClick={() => setSwapTarget({ matchId: match.id, side: "B" })}
+                          inlineSwapOptions={
+                            match.teamB.length === 1 && swapTarget?.matchId === match.id && swapTarget.side === "B"
+                              ? [{ id: match.teamB[0], label: `${match.teamB[0]} (on court)` }, ...swapCandidates]
+                              : null
+                          }
+                          onInlineSwapSelect={(playerId) => {
+                            applyTeamSwap(match.id, "B", [playerId]);
+                            setSwapTarget(null);
+                          }}
+                          onInlineSwapClose={() => setSwapTarget(null)}
                         />
                       </div>
                       <button
