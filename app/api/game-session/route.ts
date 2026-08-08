@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
-import type { RoundMode, VersusMode } from '@/lib/rating-types';
-import { getActiveGameSession, startGameSession } from '@/lib/server/game-session-repository';
+import type { BoardState, RoundMode, VersusMode } from '@/lib/rating-types';
+import { getActiveGameSession, startGameSession, updateGameSessionBoardState } from '@/lib/server/game-session-repository';
 
 export async function GET() {
   try {
@@ -41,5 +41,31 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('Failed to start game session:', error);
     return NextResponse.json({ error: 'Failed to start game session.' }, { status: 502 });
+  }
+}
+
+type PatchBody = {
+  sessionId?: string;
+  boardState?: BoardState;
+};
+
+export async function PATCH(request: Request) {
+  let body: PatchBody;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
+  }
+
+  if (!body.sessionId || !body.boardState) {
+    return NextResponse.json({ error: 'sessionId and boardState are required.' }, { status: 400 });
+  }
+
+  try {
+    await updateGameSessionBoardState(body.sessionId, body.boardState);
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    console.error('Failed to sync game session board state:', error);
+    return NextResponse.json({ error: 'Failed to sync game session board state.' }, { status: 502 });
   }
 }

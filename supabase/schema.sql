@@ -31,6 +31,12 @@ create table if not exists public.game_sessions (
   courts_available integer not null,
   started_at timestamptz not null default now(),
   ended_at timestamptz,
+  -- The live queue/court board (activePool, courtSlots, roundsWaited,
+  -- queuedAt — see BoardState in lib/rating-types.ts), synced from the
+  -- client on every change while the session is active. Null until the
+  -- first sync after Start. Lets a page refresh mid-session restore the
+  -- actual board, not just the locked-in settings above.
+  board_state jsonb,
   created_at timestamptz not null default now()
 );
 
