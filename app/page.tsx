@@ -39,13 +39,77 @@ function formatWaitDuration(ms: number): string {
 }
 
 // Medal styling for the top 3 leaderboard cards, keyed by rank index (0 =
-// 1st place). Everyone else gets the default zinc card.
-const LEADERBOARD_RANK_STYLES = [
-  { card: "border-yellow-500 bg-gradient-to-br from-yellow-500/20 via-yellow-600/10 to-zinc-950/70", name: "text-yellow-300" },
-  { card: "border-slate-300 bg-gradient-to-br from-slate-300/20 via-slate-400/10 to-zinc-950/70", name: "text-slate-200" },
-  { card: "border-amber-700 bg-gradient-to-br from-amber-600/20 via-amber-800/10 to-zinc-950/70", name: "text-amber-500" },
+// 1st place): a solid tier-colored card, matching crown/rank-number/win%
+// tints, and a shadow that gets more prominent the higher the rank.
+// Everyone else gets the default dark card with a muted crown and no shadow.
+const LEADERBOARD_RANK_TIERS = [
+  { card: "bg-[#a3812f]", crown: "text-yellow-200", rankNumber: "text-yellow-200", winPct: "text-yellow-100", shadow: "shadow-2xl shadow-black/70" },
+  { card: "bg-zinc-500", crown: "text-zinc-100", rankNumber: "text-zinc-100", winPct: "text-zinc-100", shadow: "shadow-xl shadow-black/60" },
+  { card: "bg-[#8a5a34]", crown: "text-amber-100", rankNumber: "text-amber-100", winPct: "text-amber-100", shadow: "shadow-lg shadow-black/50" },
 ];
-const DEFAULT_LEADERBOARD_STYLE = { card: "border-zinc-800 bg-zinc-950/70", name: "text-zinc-100" };
+const DEFAULT_LEADERBOARD_TIER = { card: "bg-zinc-800", crown: "text-zinc-700", rankNumber: "text-zinc-600", winPct: "text-zinc-100", shadow: "" };
+
+// DiceBear avatars, seeded by player id (name) so each player gets a
+// stable, consistent avatar without storing anything ourselves.
+function avatarUrl(seed: string): string {
+  return `https://api.dicebear.com/10.x/critters/svg?scale=1.3&translateY=10&seed=${encodeURIComponent(seed)}`;
+}
+
+function CrownIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z" />
+    </svg>
+  );
+}
+
+// A side's displayed win rate is the average of its own players' individual
+// win rates (e.g. for a 2-player team, (WR_p1 + WR_p2) / 2) — not the
+// team's own win/loss record, which isn't tracked per lineup.
+function teamWinRatePct(team: string[], matchStats: Record<string, MatchStats>): number {
+  if (team.length === 0) return 0;
+  const rates = team.map((id) => {
+    const stats = matchStats[id];
+    return stats && stats.matchesPlayed > 0 ? (stats.wins / stats.matchesPlayed) * 100 : 0;
+  });
+  return rates.reduce((sum, rate) => sum + rate, 0) / rates.length;
+}
+
+// One side of a status-board match card: overlapping avatars, team name(s),
+// and win%. Doubles as the winner-select control — click to select, click
+// again elsewhere to change; Confirm result (below the card) applies it.
+function TeamMatchBlock({
+  team,
+  winRatePct,
+  isSelected,
+  disabled,
+  onSelect,
+}: {
+  team: string[];
+  winRatePct: number;
+  isSelected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      disabled={disabled}
+      className={`flex flex-1 flex-col items-center gap-2 rounded-xl p-3 text-center transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+        isSelected ? "bg-cyan-950/50 ring-2 ring-cyan-500" : "hover:bg-zinc-800/60"
+      }`}
+    >
+      <div className="flex -space-x-3">
+        {team.map((id) => (
+          <img key={id} src={avatarUrl(id)} alt="" className="h-10 w-10 rounded-full border-2 border-zinc-900 bg-zinc-800" />
+        ))}
+      </div>
+      <p className="text-sm font-semibold text-white">{team.join(" & ")}</p>
+      <p className="text-xs font-bold text-orange-400">{Math.round(winRatePct)}% Win</p>
+    </button>
+  );
+}
 
 // A court's current match. Locked (no editing/swapping) once built — the
 // only action available is selecting then confirming a winner, which frees
@@ -573,6 +637,13 @@ export default function Home() {
       ? formatWaitDuration(currentWaits.reduce((sum, wait) => sum + wait, 0) / currentWaits.length)
       : "—";
 
+  // 1-based leaderboard position per player id, for the queue cards' rank
+  // badge. leaderboard is already ranked order (see the Leaderboard section).
+  const leaderboardRank: Record<string, number> = {};
+  leaderboard.forEach((entry, index) => {
+    leaderboardRank[entry.id] = index + 1;
+  });
+
   return (
     <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -718,15 +789,22 @@ export default function Home() {
                 return (
                   <div key={player.id} className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
                     <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium">{player.id}</p>
-                        <p className="text-xs text-zinc-500">
-                          Games: {player.gamesPlayed}
-                          {inPool && roundsWaited[player.id] ? ` • waiting ${roundsWaited[player.id]} round${roundsWaited[player.id] === 1 ? "" : "s"}` : ""}
-                          {inPool && queuedAt[player.id] ? ` • ${formatWaitDuration(now - queuedAt[player.id])}` : ""}
-                        </p>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <img
+                          src={avatarUrl(player.id)}
+                          alt=""
+                          className="h-10 w-10 shrink-0 rounded-full border border-zinc-700 bg-zinc-800"
+                        />
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{player.id}</p>
+                          <p className="text-xs text-zinc-500">
+                            Games: {player.gamesPlayed}
+                            {inPool && roundsWaited[player.id] ? ` • waiting ${roundsWaited[player.id]} round${roundsWaited[player.id] === 1 ? "" : "s"}` : ""}
+                            {inPool && queuedAt[player.id] ? ` • ${formatWaitDuration(now - queuedAt[player.id])}` : ""}
+                          </p>
+                        </div>
                       </div>
-                      <span className={`rounded-full px-2 py-1 text-xs ${inPool ? "bg-emerald-600/20 text-emerald-400" : "bg-zinc-800 text-zinc-300"}`}>
+                      <span className={`shrink-0 rounded-full px-2 py-1 text-xs ${inPool ? "bg-emerald-600/20 text-emerald-400" : "bg-zinc-800 text-zinc-300"}`}>
                         {inPool ? "Queued" : "Idle"}
                       </span>
                     </div>
@@ -760,28 +838,41 @@ export default function Home() {
             <div className="mt-4 space-y-3">
               {leaderboard.map((player, rank) => {
                 const stats = matchStats[player.id];
-                const winRateLabel =
-                  stats && stats.matchesPlayed > 0 ? `${Math.round((stats.wins / stats.matchesPlayed) * 100)}%` : "—";
-                const style = LEADERBOARD_RANK_STYLES[rank] ?? DEFAULT_LEADERBOARD_STYLE;
+                const wins = stats?.wins ?? 0;
+                const losses = stats ? stats.matchesPlayed - stats.wins : 0;
+                const winRateLabel = stats && stats.matchesPlayed > 0 ? `${Math.round((wins / stats.matchesPlayed) * 100)}%` : "—";
+                const tier = LEADERBOARD_RANK_TIERS[rank] ?? DEFAULT_LEADERBOARD_TIER;
                 return (
-                  <div key={player.id} className={`font-coda rounded-lg border-2 p-3 ${style.card}`}>
-                    <div className="flex items-center justify-between">
-                      <span className={`text-xl font-bold ${style.name}`}>{player.id}</span>
+                  <div key={player.id} className={`font-coda flex items-center gap-4 rounded-2xl p-4 ${tier.card} ${tier.shadow}`}>
+                    <img
+                      src={avatarUrl(player.id)}
+                      alt=""
+                      className="h-14 w-14 shrink-0 rounded-full border-2 border-black/20 bg-zinc-800"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-lg text-white">{player.id}</p>
+                      <div className="mt-1.5 flex gap-4">
+                        <div>
+                          <p className="text-base text-white">{player.gamesPlayed}</p>
+                          <p className="text-[10px] uppercase tracking-wide text-white/60">GP</p>
+                        </div>
+                        <div>
+                          <p className="text-base text-white">{wins}</p>
+                          <p className="text-[10px] uppercase tracking-wide text-white/60">Win</p>
+                        </div>
+                        <div>
+                          <p className="text-base text-white">{losses}</p>
+                          <p className="text-[10px] uppercase tracking-wide text-white/60">Loss</p>
+                        </div>
+                        <div>
+                          <p className={`text-base font-bold ${tier.winPct}`}>{winRateLabel}</p>
+                          <p className="text-[10px] uppercase tracking-wide text-white/60">Win %</p>
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400">
-                      <span>Win rate: {winRateLabel}</span>
-                      <span>Games played: {player.gamesPlayed}</span>
-                      <span className="group relative inline-flex">
-                        <span
-                          tabIndex={0}
-                          className="flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-zinc-600 text-[10px] font-semibold leading-none text-zinc-400 outline-none hover:border-cyan-500 hover:text-cyan-300 focus:border-cyan-500 focus:text-cyan-300"
-                        >
-                          i
-                        </span>
-                        <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-cyan-900/60 bg-cyan-950/95 px-2.5 py-1.5 text-[11px] text-zinc-200 opacity-0 shadow-xl transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-                          mu {Math.round(player.mu)} • sigma {Math.round(player.sigma)}
-                        </span>
-                      </span>
+                    <div className="flex shrink-0 flex-col items-center gap-1">
+                      {rank < 3 ? <CrownIcon className={`h-5 w-5 ${tier.crown}`} /> : null}
+                      <span className={`text-3xl font-black ${tier.rankNumber}`}>{rank + 1}</span>
                     </div>
                   </div>
                 );
@@ -902,7 +993,24 @@ export default function Home() {
             </button>
             <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
               <p className="text-sm text-zinc-400">Current queue</p>
-              <p className="mt-2 font-medium">{activePool.join(" → ") || "(empty)"}</p>
+              {activePool.length === 0 ? (
+                <p className="mt-2 font-medium text-zinc-500">(empty)</p>
+              ) : (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {activePool.map((id, index) => (
+                    <div key={id} className="flex items-center gap-2">
+                      {index > 0 ? <span className="text-zinc-600">→</span> : null}
+                      <div className="flex items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 py-1 pr-3 pl-1">
+                        <img src={avatarUrl(id)} alt="" className="h-6 w-6 rounded-full bg-zinc-800" />
+                        <span className="text-xs font-medium text-white">{id}</span>
+                        {leaderboardRank[id] ? (
+                          <span className="text-[10px] font-bold text-cyan-400">#{leaderboardRank[id]}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -918,36 +1026,30 @@ export default function Home() {
                 // keeps the board from re-flowing when a court finishes.
                 <div key={index}>
                   {match ? (
-                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-                      <p className="text-sm text-zinc-300">
-                        {match.teamA.join(", ")} <span className="text-zinc-500">vs</span> {match.teamB.join(", ")}
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-3 text-sm">
-                        <label className="rounded-lg border border-zinc-700 px-3 py-2">
-                          <input
-                            type="radio"
-                            checked={match.selectedWinner === "A"}
-                            onChange={() => selectWinner(match.id, "A")}
-                            disabled={isBusy}
-                            className="mr-2"
-                          />
-                          {match.teamA.join(", ")} won
-                        </label>
-                        <label className="rounded-lg border border-zinc-700 px-3 py-2">
-                          <input
-                            type="radio"
-                            checked={match.selectedWinner === "B"}
-                            onChange={() => selectWinner(match.id, "B")}
-                            disabled={isBusy}
-                            className="mr-2"
-                          />
-                          {match.teamB.join(", ")} won
-                        </label>
+                    <div className="rounded-2xl bg-zinc-950 p-4">
+                      <div className="flex items-center gap-3">
+                        <TeamMatchBlock
+                          team={match.teamA}
+                          winRatePct={teamWinRatePct(match.teamA, matchStats)}
+                          isSelected={match.selectedWinner === "A"}
+                          disabled={isBusy}
+                          onSelect={() => selectWinner(match.id, "A")}
+                        />
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black text-[11px] font-bold text-white">
+                          vs
+                        </span>
+                        <TeamMatchBlock
+                          team={match.teamB}
+                          winRatePct={teamWinRatePct(match.teamB, matchStats)}
+                          isSelected={match.selectedWinner === "B"}
+                          disabled={isBusy}
+                          onSelect={() => selectWinner(match.id, "B")}
+                        />
                       </div>
                       <button
                         onClick={() => confirmMatch(match)}
                         disabled={isBusy || !match.selectedWinner}
-                        className="mt-3 rounded-lg bg-cyan-600 px-3 py-2 text-sm font-medium disabled:opacity-50"
+                        className="mt-3 w-full rounded-lg bg-cyan-600 px-3 py-2 text-sm font-medium disabled:opacity-50"
                       >
                         Confirm result
                       </button>
