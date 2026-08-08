@@ -79,6 +79,22 @@ export async function stopGameSession(id: string): Promise<GameSession> {
   return rowToSession(data);
 }
 
+// Ended sessions, most recent first — the history page's session list.
+export async function listPastGameSessions(): Promise<GameSession[]> {
+  const supabase = getSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from('game_sessions')
+    .select(SESSION_COLUMNS)
+    .not('ended_at', 'is', null)
+    .order('started_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to load past game sessions: ${error.message}`);
+  }
+
+  return (data ?? []).map(rowToSession);
+}
+
 // Wipes every session row. Mirrors player-repository.ts's deleteAllData,
 // called alongside it from the "Reset all data" flow.
 export async function deleteAllGameSessions(): Promise<void> {

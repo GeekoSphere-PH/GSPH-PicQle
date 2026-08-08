@@ -20,14 +20,6 @@ create table if not exists public.players (
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.matches (
-  id uuid primary key default gen_random_uuid(),
-  team_a text[] not null,
-  team_b text[] not null,
-  winner text not null check (winner in ('A', 'B')),
-  created_at timestamptz not null default now()
-);
-
 -- A "game profile setting" session: the round/versus mode and courts count
 -- locked in by Start, and when that lock was released by Stop. `ended_at`
 -- null means the session is still active — at most one such row should
@@ -39,6 +31,18 @@ create table if not exists public.game_sessions (
   courts_available integer not null,
   started_at timestamptz not null default now(),
   ended_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.matches (
+  id uuid primary key default gen_random_uuid(),
+  team_a text[] not null,
+  team_b text[] not null,
+  winner text not null check (winner in ('A', 'B')),
+  -- Nullable: matches recorded before this column existed have no session
+  -- to attribute to, and simply won't appear grouped under any session in
+  -- history. Set from the active game_session at match-record time.
+  session_id uuid references public.game_sessions(id),
   created_at timestamptz not null default now()
 );
 

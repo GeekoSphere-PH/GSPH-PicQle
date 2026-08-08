@@ -17,6 +17,7 @@ export type MatchRow = {
   team_a: string[];
   team_b: string[];
   winner: 'A' | 'B';
+  session_id: string | null;
   created_at: string;
 };
 

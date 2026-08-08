@@ -11,6 +11,7 @@ export const maxDuration = 30;
 type Body = {
   matchResult?: MatchResult;
   players?: Record<string, PlayerRating>;
+  sessionId?: string | null;
   now?: number;
 };
 
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
         .map((id) => result.players.get(id))
         .filter((player): player is PlayerRating => Boolean(player));
       await upsertPlayers(participants);
-      await recordMatch(matchResult);
+      await recordMatch(matchResult, body.sessionId ?? null);
     } catch (persistError) {
       console.error('Failed to persist match result:', persistError);
       return NextResponse.json({ error: 'Rating computed but failed to save. Please retry.' }, { status: 502 });

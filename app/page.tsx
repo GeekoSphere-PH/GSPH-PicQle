@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { mapToRecord, recordToMap } from "@/lib/map-utils";
@@ -415,7 +416,11 @@ export default function Home() {
         matchStats: Record<string, MatchStats>;
       }>(
         "/api/rating/match",
-        { matchResult: { teamA: match.teamA, teamB: match.teamB, winner: match.selectedWinner }, players: mapToRecord(players) },
+        {
+          matchResult: { teamA: match.teamA, teamB: match.teamB, winner: match.selectedWinner },
+          players: mapToRecord(players),
+          sessionId: gameSession?.id ?? null,
+        },
       );
       setPlayers(recordToMap(data.players));
       setLeaderboard(data.leaderboard);
@@ -520,13 +525,21 @@ export default function Home() {
                 This minimal interface lets you test the queue model, build rounds from the live pool, and apply match outcomes to the Glicko-2 rating engine. All rating computation runs in a separate microservice — this page only sends and receives state.
               </p>
             </div>
-            <button
-              onClick={resetAllData}
-              disabled={isBusy}
-              className="shrink-0 rounded-lg border border-red-800 bg-red-950/40 px-3 py-2 text-sm font-medium text-red-300 hover:bg-red-950/70 disabled:opacity-50"
-            >
-              Reset all data
-            </button>
+            <div className="flex shrink-0 gap-2">
+              <Link
+                href="/history"
+                className="rounded-lg border border-zinc-700 px-3 py-2 text-sm font-medium hover:bg-zinc-800"
+              >
+                History
+              </Link>
+              <button
+                onClick={resetAllData}
+                disabled={isBusy}
+                className="rounded-lg border border-red-800 bg-red-950/40 px-3 py-2 text-sm font-medium text-red-300 hover:bg-red-950/70 disabled:opacity-50"
+              >
+                Reset all data
+              </button>
+            </div>
           </div>
           <p className="mt-2 text-xs text-red-400/80">
             Single-instance warning: this database is shared. Resetting clears every player and match for all connected users, with no undo.
