@@ -580,9 +580,6 @@ export default function Home() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-3xl font-semibold">Pickleball rating queue demo</h1>
-              <p className="mt-2 max-w-2xl text-sm text-zinc-400">
-                This minimal interface lets you test the queue model, build rounds from the live pool, and apply match outcomes to the Glicko-2 rating engine. All rating computation runs in a separate microservice — this page only sends and receives state.
-              </p>
             </div>
             <div className="flex shrink-0 gap-2">
               <Link
